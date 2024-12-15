@@ -127,4 +127,4 @@ ln -s $JOBSCRATCH /tmp/nvidia
 
 
 
-run_jupyter 01-gradient-stability/gradient-stability.ipynb
+run_jupyter gradient-stability.ipynb
