@@ -4,6 +4,8 @@ from functools import partial
 import operator
 import numpy as np
 from jax._src import dtypes as _dtypes
+from tqdm import tqdm
+
 
 EPS = 1e-8
 
@@ -64,3 +66,23 @@ def numerical_jvp(f, primals, tangents, eps=EPS):
     f_pos = f(*add(primals, delta))
     f_neg = f(*sub(primals, delta))
     return scalar_mul(safe_sub(f_pos, f_neg), 0.5 / eps)
+
+
+def finite_diff(f , x , eps = EPS):
+    grads = jax.tree.map(jnp.zeros_like, x)
+
+    indices = jnp.moveaxis(jnp.indices(x.shape) , 0, -1).reshape(-1, x.ndim)
+
+    for index in tqdm(indices):
+      tangets = jax.tree.map(jnp.zeros_like, x)
+      index = tuple(index)
+
+      tangets = jax.tree.map(lambda t: t.at[index].set(1.0) , tangets)
+
+      jvp_res = numerical_jvp(f , (x, ) , (tangets, ) , eps = eps)
+      grads = jax.tree.map(lambda g: g.at[index].set(jvp_res) , grads)
+
+    return grads
+
+
+
