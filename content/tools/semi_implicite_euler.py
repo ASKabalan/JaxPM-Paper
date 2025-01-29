@@ -17,7 +17,6 @@ _SolverState: TypeAlias = None
 
 Ya: TypeAlias = PyTree[Float[ArrayLike, "?*y"], " Y"]
 Yb: TypeAlias = PyTree[Float[ArrayLike, "?*y"], " Y"]
-import jax
 
 class SemiImplicitEuler(AbstractSolver):
     """Semi-implicit Euler's method.

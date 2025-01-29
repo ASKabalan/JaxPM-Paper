@@ -1,10 +1,9 @@
 import jax
 import jax.numpy as jnp
 from jax import custom_vjp
-from diffrax import ODETerm, SemiImplicitEuler, SaveAt
+from diffrax import ODETerm
 from functools import partial
 from typing import Any, Tuple
-from functools import partial
 from diffrax import AbstractSolver
 
 

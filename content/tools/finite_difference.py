@@ -22,7 +22,7 @@ def _dtype(x):
 def inner_prod(xs, ys):
   def contract(x, y):
     return np.real(np.dot(np.conj(x).reshape(-1), y.reshape(-1)))
-  return tree_reduce(np.add, tree_map(contract, xs, ys))
+  return jax.tree.reduce(np.add, jax.tree.map(contract, xs, ys))
 
 
 def is_python_scalar(val):
@@ -47,9 +47,9 @@ def _preserve_input_types(f):
 
 
 # Partial functions for arithmetic
-add = partial(jax.tree_map, _preserve_input_types(operator.add))
-sub = partial(jax.tree_map, _preserve_input_types(operator.sub))
-safe_sub = partial(jax.tree_map, lambda x, y: _safe_subtract(x, y, dtype=_dtype(x)))
+add = partial(jax.tree.map, _preserve_input_types(operator.add))
+sub = partial(jax.tree.map, _preserve_input_types(operator.sub))
+safe_sub = partial(jax.tree.map, lambda x, y: _safe_subtract(x, y, dtype=_dtype(x)))
 
 
 def scalar_mul(xs, a):
@@ -57,7 +57,7 @@ def scalar_mul(xs, a):
     dtype = _dtype(x)
     result = np.multiply(x, np.array(a, dtype=dtype), dtype=dtype)
     return result.item() if is_python_scalar(x) else result
-  return jax.tree_map(mul, xs)
+  return jax.tree.map(mul, xs)
 
 
 def numerical_jvp(f, primals, tangents, eps=EPS):
