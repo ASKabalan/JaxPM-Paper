@@ -141,6 +141,7 @@ def run_nbody(
         y0 = (dx, p)
     elif len(terms) == 3:
         *terms, first_kick_term = terms
+        y0 = (dx, p)
         y0 = solver.first_step(
             first_kick_term, t0=0.1, dt0=step_size, y0=y0, args=cosmo
         )
@@ -153,7 +154,8 @@ def run_nbody(
         ode_solutions = integrate(
             y0, cosmo, terms, solver=solver, t0=t0, t1=t1, dt0=step_size
         )
-        return ode_solutions[0], (t1 - t0) / step_size
+        last_y = jax.tree.map(lambda x: x[-1], ode_solutions)
+        return last_y[0], (t1 - t0) / step_size
     else:
         if adjoint == "RECURSIVE":
             adjoint = RecursiveCheckpointAdjoint(checkpoints=checkpoints)
