@@ -129,7 +129,7 @@ def symplectic_ode(mesh_shape, paint_absolute_pos=True, halo_size=0, sharding=No
 
         return dvel
 
-    return kick, drift
+    return drift, kick
 
 
 

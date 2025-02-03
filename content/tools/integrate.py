@@ -129,6 +129,7 @@ def integrate_fwd(
     """
     fwd_save_at = handle_saveat(saveat, t0, t1)
     args = jax.tree.map(jnp.asarray, args)
+    y0 = jax.tree_map(jnp.asarray, y0)
 
     def inner_forward_step(carry):
         y, args_, tc, t1 = carry
@@ -204,9 +205,12 @@ def integrate_bwd(
     ys_ct = cotangents  # Gradient w.r.t. the forward pass snapshots
 
     # Initialize adjoint for args and final y
-    args = jax.tree.map(jnp.asarray, args)
-    adj_args = jax.tree_map(lambda x: jnp.zeros_like(x), args)
-    adj_y = jax.tree_map(lambda x: jnp.zeros_like(x), y_final)
+    
+    diff_args = eqx.filter(args, eqx.is_inexact_array)
+    diff_y = eqx.filter(y_final, eqx.is_inexact_array)
+
+    adj_args = jax.tree_map(lambda x: jnp.zeros_like(x), diff_args)
+    adj_y = jax.tree_map(lambda x: jnp.zeros_like(x), diff_y)
 
     def inner_backward_step(carry):
         """
@@ -281,7 +285,7 @@ def integrate_bwd(
     t_steps = jnp.concatenate((jnp.asarray([t0]), t_steps[:-1]))
 
     # Initial carry is the final state and final adjoint
-    init_carry = (y_final, args, adj_y, adj_args, t1)
+    init_carry = (diff_y, diff_args, adj_y, adj_args, t1)
 
     # We'll pair up the cotangents with the times
     vals = (ys_ct, t_steps)

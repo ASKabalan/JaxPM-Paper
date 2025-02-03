@@ -66,12 +66,12 @@ class EfficientLeapFrog(AbstractSolver):
         # Drift
         t0t1 = (t0 * t1) ** 0.5  # Geometric mean of t0 and t1
         cosmo = args[0]
-        control1 = term_2.contr(t0, t1, cosmo=args)
-        y1_1 = (y0_1**ω + term_2.vf_prod(t0t1, y0_2, args, control1) ** ω).ω
+        control1 = term_1.contr(t0, t1, cosmo=args)
+        y1_1 = (y0_1**ω + term_1.vf_prod(t0t1, y0_2, args, control1) ** ω).ω
 
         # Double kick or last kick
-        control2 = term_1.contr(t0, t1, cosmo=args)
-        y1_2 = (y0_2**ω + term_1.vf_prod(t1, y1_1, args, control2) ** ω).ω
+        control2 = term_2.contr(t0, t1, cosmo=args)
+        y1_2 = (y0_2**ω + term_2.vf_prod(t1, y1_1, args, control2) ** ω).ω
 
         y1 = (y1_1, y1_2)
         dense_info = dict(y0=y0, y1=y1)
@@ -94,12 +94,12 @@ class EfficientLeapFrog(AbstractSolver):
         y1_1, y1_2 = y1
         t0t1 = (t0 * t1) ** 0.5  # Geometric mean of t0 and t1
         # Reverse Kick
-        control2 = term_1.contr(t0, t1, cosmo=args)
-        y0_2 = (y1_2**ω - term_1.vf_prod(t1, y1_1, args, control2) ** ω).ω
+        control2 = term_2.contr(t0, t1, cosmo=args)
+        y0_2 = (y1_2**ω - term_2.vf_prod(t1, y1_1, args, control2) ** ω).ω
 
         # Reverse Drift
-        control1 = term_2.contr(t0, t1, cosmo=args)
-        y0_1 = (y1_1**ω - term_2.vf_prod(t0t1, y0_2, args, control1) ** ω).ω
+        control1 = term_1.contr(t0, t1, cosmo=args)
+        y0_1 = (y1_1**ω - term_1.vf_prod(t0t1, y0_2, args, control1) ** ω).ω
 
         y0 = (y0_1, y0_2)
 
