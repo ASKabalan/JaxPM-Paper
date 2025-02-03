@@ -129,7 +129,6 @@ def integrate_fwd(
     """
     fwd_save_at = handle_saveat(saveat, t0, t1)
     args = jax.tree.map(jnp.asarray, args)
-    y0 = jax.tree_map(jnp.asarray, y0)
 
     def inner_forward_step(carry):
         y, args_, tc, t1 = carry
@@ -205,19 +204,19 @@ def integrate_bwd(
     ys_ct = cotangents  # Gradient w.r.t. the forward pass snapshots
 
     # Initialize adjoint for args and final y
-    
-    diff_args = eqx.filter(args, eqx.is_inexact_array)
-    diff_y = eqx.filter(y_final, eqx.is_inexact_array)
+    args = jax.tree.map(jnp.asarray, args)
+
+    diff_args , nondiff_args = eqx.partition(args , eqx.is_inexact_array_like)
 
     adj_args = jax.tree_map(lambda x: jnp.zeros_like(x), diff_args)
-    adj_y = jax.tree_map(lambda x: jnp.zeros_like(x), diff_y)
+    adj_y = jax.tree_map(lambda x: jnp.zeros_like(x), y_final)
 
     def inner_backward_step(carry):
         """
         Reverses a single forward integration step from `tc` down to `tc - dt0`,
         and updates the adjoints accordingly.
         """
-        y, args, adj_y, adj_args, t0, tc = carry
+        y, diff_args, adj_y, adj_args, t0, tc = carry
     
         t_prev = tc - dt0
         # Reverse the forward step
@@ -226,19 +225,20 @@ def integrate_bwd(
         )
 
         # We'll differentiate w.r.t. "forward step" to get partial derivatives.
-        def _to_vjp(y, z_args):
+        def _to_vjp(y, diff_args):
+            args = eqx.combine(diff_args , nondiff_args)
             y_next, _, _, _, _ = solver.step(
-                terms, t_prev, tc, y, z_args, solver_state=None, made_jump=False
+                terms, t_prev, tc, y, args, solver_state=None, made_jump=False
             )
             return y_next
 
-        _, f_vjp = jax.vjp(_to_vjp, y_prev, args)
+        _, f_vjp = jax.vjp(_to_vjp, y_prev, diff_args)
         adj_y, new_adj_args = f_vjp(adj_y)
 
         # Accumulate into existing adjoints
         new_d_args = jax.tree.map(jnp.add, new_adj_args, adj_args)
 
-        return (y_prev, args, adj_y, new_d_args, t0, t_prev)
+        return (y_prev, diff_args, adj_y, new_d_args, t0, t_prev)
 
     def inner_backward_cond(carry):
         """
@@ -253,13 +253,14 @@ def integrate_bwd(
         current adjoint, then step backward until we reach the previous snapshot.
         """
         y_ct, t0 = vals
-        y, args, adj_y, adj_args, tc = outer_carry
+        y, diff_args, adj_y, adj_args, tc = outer_carry
 
         # Differentiate the "save function" at snapshot time `tc_`:
-        def _to_vjp(y, z_args):
-            return bwd_save_at.subs.fn(tc, y, z_args)
+        def _to_vjp(y, diff_args):
+            args = eqx.combine(diff_args , nondiff_args)
+            return bwd_save_at.subs.fn(tc, y, args)
 
-        _, f_vjp = jax.vjp(_to_vjp, y, args)
+        _, f_vjp = jax.vjp(_to_vjp, y, diff_args)
         new_adj_y, new_adj_args = f_vjp(y_ct)
 
         # Accumulate
@@ -267,12 +268,12 @@ def integrate_bwd(
         adj_args = jax.tree.map(jnp.add, adj_args, new_adj_args)
 
         # Now step backward in increments of dt0 from the current snapshot time down to snap_t0_
-        inner_carry = (y, args, adj_y, adj_args, t0, tc)
-        y_prev, args, adj_y, adj_args, tc, _ = jax.lax.while_loop(
+        inner_carry = (y, diff_args, adj_y, adj_args, t0, tc)
+        y_prev, diff_args, adj_y, adj_args, tc, _ = jax.lax.while_loop(
             inner_backward_cond, inner_backward_step, inner_carry
         )
 
-        outer_carry = (y_prev, args, adj_y, adj_args, tc)
+        outer_carry = (y_prev, diff_args, adj_y, adj_args, tc)
         return outer_carry, None
 
     # Reverse through the snapshot times
@@ -285,7 +286,7 @@ def integrate_bwd(
     t_steps = jnp.concatenate((jnp.asarray([t0]), t_steps[:-1]))
 
     # Initial carry is the final state and final adjoint
-    init_carry = (diff_y, diff_args, adj_y, adj_args, t1)
+    init_carry = (y_final, diff_args, adj_y, adj_args, t1)
 
     # We'll pair up the cotangents with the times
     vals = (ys_ct, t_steps)
@@ -294,6 +295,8 @@ def integrate_bwd(
     (_, _, adj_y, adj_args, _), _ = jax.lax.scan(
         outer_backward_step, init_carry, vals, reverse=True
     )
+    zero_nondiff = jax.tree_map(jnp.zeros_like, nondiff_args)
+    adj_args = eqx.combine(adj_args , zero_nondiff)
 
     # Return the adjoints for y0 and args. The rest are placeholders (None)
     # matching the custom_vjp signature convention.
