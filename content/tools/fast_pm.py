@@ -41,7 +41,8 @@ class EfficientLeapFrog(AbstractSolver):
 
     def first_step(self , term , t0 , dt0 , y0 , args):
         t1 = t0 + dt0
-        control = term.contr(t0, t1, cosmo=args)
+        cosmo = args[0]
+        control = term.contr(t0, t1, cosmo=cosmo)
         y0_1, y0_2 = y0
 
         y1_2 = (y0_2**ω + term.vf_prod(t0, y0_1, args, control) ** ω).ω
@@ -64,6 +65,7 @@ class EfficientLeapFrog(AbstractSolver):
         y0_1, y0_2 = y0
         # Drift
         t0t1 = (t0 * t1) ** 0.5  # Geometric mean of t0 and t1
+        cosmo = args[0]
         control1 = term_2.contr(t0, t1, cosmo=args)
         y1_1 = (y0_1**ω + term_2.vf_prod(t0t1, y0_2, args, control1) ** ω).ω
 
