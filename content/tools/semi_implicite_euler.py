@@ -43,6 +43,15 @@ class SemiImplicitEuler(AbstractSolver):
     ) -> _SolverState:
         return None
 
+    def first_step(self , term , t0 , dt0 , y0 , args):
+        t1 = t0 + dt0
+        control = term.contr(t0, t1)
+        y0_1, y0_2 = y0
+
+        y1_2 = (y0_2**ω + term.vf_prod(t0, y0_1, args, control) ** ω).ω
+        
+        return (y0_1, y1_2)
+
     def step(
         self,
         terms: tuple[AbstractTerm, AbstractTerm],
