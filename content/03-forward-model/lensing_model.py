@@ -15,7 +15,7 @@ import numpyro.distributions as dist
 from jax_cosmo.scipy.integrate import simps
 from jax.scipy.ndimage import map_coordinates
 import jax_cosmo.constants as constants
-
+from jaxdecomp import ShardedArray
 from jaxpm.pm import pm_forces, growth_factor, growth_rate
 from jaxpm.kernels import fftk
 from jaxpm.painting import cic_paint_2d
@@ -24,6 +24,7 @@ from jaxpm.distributed import fft3d, ifft3d, uniform_particles
 import sys
 import os
 from typing import NamedTuple
+from functools import partial
 
 parent_dir = os.path.abspath("..")
 sys.path.append(parent_dir)
@@ -31,6 +32,19 @@ sys.path.append(parent_dir)
 from tools.integrate import integrate as reverse_adjoint_integrate  # noqa : E402
 from tools.semi_implicite_euler import SemiImplicitEuler  # noqa : E402
 from tools.ode import symplectic_fpm_ode  # noqa : E402
+
+Planck18 = partial(
+    jc.Cosmology,
+    # Omega_m = 0.3111
+    Omega_c=0.2607,
+    Omega_b=0.0490,
+    Omega_k=0.0,
+    h=0.6766,
+    n_s=0.9665,
+    sigma8=0.8102,
+    w0=-1.0,
+    wa=0.0,
+)
 
 
 def convergence_Born(cosmo, density_planes, r, a, dx, dz, coords, z_source):
@@ -71,7 +85,6 @@ def convergence_Born(cosmo, density_planes, r, a, dx, dz, coords, z_source):
     return convergence.sum(axis=0)
 
 
-# field = normal_field(mesh_shape, seed=seed, sharding=sharding)
 def E(cosmo, a):
     return jnp.sqrt(jc.background.Esqr(cosmo, a))
 
@@ -116,12 +129,14 @@ def lpt_lightcone(cosmo, initial_conditions, a, mesh_shape):
 
 def integrate(terms, solver, t0, t1, dt0, y0, args, saveat, adjoint):
     if isinstance(adjoint, RecursiveCheckpointAdjoint):
-        solution =  diffeqsolve(
+        solution = diffeqsolve(
             terms, solver, t0, t1, dt0, y0, args, saveat=saveat, adjoint=adjoint
         )
-        return solution.ys , saveat.subs.ts
+        return solution.ys, saveat.subs.ts
     else:
-        solution =  reverse_adjoint_integrate(terms, solver, t0, t1, dt0, y0, args, saveat)
+        solution = reverse_adjoint_integrate(
+            terms, solver, t0, t1, dt0, y0, args, saveat
+        )
         return solution, saveat.subs.ts
 
 
@@ -134,9 +149,12 @@ def make_full_field_model(
     density_plane_npix=None,
     density_plane_smoothing=None,
     adjoint=RecursiveCheckpointAdjoint(5),
+    t0=0.01,
+    dt0=0.05,
+    t1=1.0,
 ):
     def density_plane_fn(t, y, args):
-        cosmo, = args
+        (cosmo,) = args
         positions = y[0]
         nx, ny, nz = box_shape
 
@@ -211,7 +229,7 @@ def make_full_field_model(
 
         density_plane_smoothing = 0.1
         drift, kick, first_kick = symplectic_fpm_ode(
-            box_shape, dt0=0.05, paint_absolute_pos=False
+            box_shape, dt0=dt0, paint_absolute_pos=False
         )
         first_term = ODETerm(first_kick)
         ode_terms = ODETerm(drift), ODETerm(kick)
@@ -226,16 +244,16 @@ def make_full_field_model(
         solver = SemiImplicitEuler()
         saveat = SaveAt(ts=a_center[::-1], fn=density_plane_fn)
         y0 = (eps, p)
-        args = cosmo,
+        args = (cosmo,)
 
         y0 = solver.first_step(first_term, 0.01, dt0=0.05, y0=y0, args=args)
 
-        solution , ts = integrate(
+        solution, ts = integrate(
             ode_terms,
             solver,
-            t0=0.01,
-            t1=1.0,
-            dt0=0.05,
+            t0=t0,
+            t1=t1,
+            dt0=dt0,
             y0=y0,
             args=args,
             saveat=saveat,
@@ -301,53 +319,75 @@ def make_full_field_model(
     return forward_model
 
 
-class LensingConfig(NamedTuple):
+class Configurations(NamedTuple):
     field_size: float
     field_npix: int
     box_shape: tuple
-    box_size: tuple
+    box_size: list
+    density_plane_width: int
+    density_plane_npix: int
+    density_plane_smoothing: float
     nz_shear: list
+    fiducial_cosmology: jc.Cosmology
     sigma_e: float
     priors: dict
-    fiducial_cosmology: jc.Cosmology
+    t0 : float
+    dt0 : float
+    t1 : float
+
 
 # Build the probabilistic model
 def full_field_probmodel(config):
-    forward_model = make_full_field_model(
-        config.field_size, config.field_npix, config.box_shape, config.box_size
-    )
-
-    # Sampling the cosmological parameters
-    cosmo = config.fiducial_cosmology(
-        **{k: numpyro.sample(k, v) for k, v in config.priors.items()}
-    )
-
-    # Sampling the initial conditions
-    initial_conditions = numpyro.sample(
-        "initial_conditions",
-        dist.Normal(jnp.zeros(config.box_shape), jnp.ones(config.box_shape)),
-    )
-
-    # Apply the forward model
-    convergence_maps, _ = forward_model(cosmo, config.nz_shear, initial_conditions)
-
-    # Define the likelihood of observations
-    observed_maps = [
-        numpyro.sample(
-            "kappa_%d" % i,
-            dist.Normal(
-                k,
-                config.sigma_e
-                / jnp.sqrt(
-                    config.nz_shear[i].gals_per_arcmin2
-                    * (config.field_size * 60 / config.field_npix) ** 2
-                ),
-            ),
+    def model():
+        forward_model = make_full_field_model(
+            config.field_size,
+            config.field_npix,
+            config.box_shape,
+            config.box_size,
+            config.density_plane_width,
+            config.density_plane_npix,
+            config.density_plane_smoothing,
+            adjoint=RecursiveCheckpointAdjoint(checkpoints=5),
+            t0=config.t0,
+            dt0=config.dt0,
+            t1=config.t1,
         )
-        for i, k in enumerate(convergence_maps)
-    ]
 
-    return observed_maps
+        # Sampling the cosmological parameters
+        cosmo = config.fiducial_cosmology(
+            **{k: numpyro.sample(k, v) for k, v in config.priors.items()}
+        )
+
+        # Sampling the initial conditions
+        initial_conditions = numpyro.sample(
+            "initial_conditions",
+            dist.Normal(jnp.zeros(config.box_shape), jnp.ones(config.box_shape)),
+        )
+
+        initial_conditions = ShardedArray(initial_conditions)
+
+        # Apply the forward model
+        convergence_maps, _ = forward_model(cosmo, config.nz_shear, initial_conditions)
+
+        # Define the likelihood of observations
+        observed_maps = [
+            numpyro.sample(
+                "kappa_%d" % i,
+                dist.Normal(
+                    k,
+                    config.sigma_e
+                    / jnp.sqrt(
+                        config.nz_shear[i].gals_per_arcmin2
+                        * (config.field_size * 60 / config.field_npix) ** 2
+                    ),
+                ),
+            )
+            for i, k in enumerate(convergence_maps)
+        ]
+
+        return observed_maps
+
+    return model
 
 
 def pixel_window_function(L, pixel_size_arcmin):
