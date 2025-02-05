@@ -121,7 +121,7 @@ def integrate(terms, solver, t0, t1, dt0, y0, args, saveat, adjoint):
         )
         return solution.ys , saveat.subs.ts
     else:
-        solution =  reverse_adjoint_integrate(y0, args, terms, solver, t0, t1, dt0, saveat)
+        solution =  reverse_adjoint_integrate(terms, solver, t0, t1, dt0, y0, args, saveat)
         return solution, saveat.subs.ts
 
 
@@ -147,7 +147,6 @@ def make_full_field_model(
             / box_size[2]
             * box_shape[2]
         )
-
         positions = uniform_particles(box_shape) + positions
         xy = positions[..., :2]
         d = positions[..., 2]
