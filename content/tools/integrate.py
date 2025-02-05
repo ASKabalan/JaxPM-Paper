@@ -99,8 +99,6 @@ def integrate(
         y0_args_ts, terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y
     )
 
-
-
 def _fwd_loop(
     y0_args_ts: Any,
     *,

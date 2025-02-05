@@ -1,13 +1,16 @@
 import matplotlib.pyplot as plt
-
 from pmwd import (
     Configuration,
-    Cosmology, SimpleLCDM,
-    boltzmann, linear_power, growth,
-    white_noise, linear_modes,
+    Cosmology,
+    SimpleLCDM,
+    boltzmann,
+    growth,
+    linear_modes,
+    linear_power,
     lpt,
     nbody,
     scatter,
+    white_noise,
 )
 from pmwd.pm_util import fftinv
 from pmwd.spec_util import powspec

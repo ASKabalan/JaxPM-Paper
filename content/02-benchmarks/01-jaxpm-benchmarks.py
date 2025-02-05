@@ -1,41 +1,36 @@
 import os
 import sys
+
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(parent_dir)
 os.environ["EQX_ON_ERROR"] = "nan"
+import argparse
+from functools import partial
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
-from functools import partial
-from jaxdecomp import ShardedArray
-
-from jaxpm.painting import cic_paint_dx
-from jaxpm.pm import lpt, make_diffrax_ode
+import numpy as np
 from diffrax import (
+    BacksolveAdjoint,
     ConstantStepSize,
-    ODETerm,
-    diffeqsolve,
     Dopri5,
-    Tsit5,
+    ODETerm,
     PIDController,
     RecursiveCheckpointAdjoint,
-    BacksolveAdjoint,
+    Tsit5,
+    diffeqsolve,
 )
-
-from typing import NamedTuple
-
-from tools.ode import symplectic_ode, DriftODETerm, DoubleKickODETerm, KickODETerm
-from tools.integrate import integrate
-from tools.semi_implicite_euler import SemiImplicitEuler
-from tools.fast_pm import EfficientLeapFrog
-
-
-from pmesh.pm import ParticleMesh
-
-import numpy as np
-
-import argparse
 from jax_hpc_profiler import Timer
+from jaxdecomp import ShardedArray
+from jaxpm.painting import cic_paint_dx
+from jaxpm.pm import lpt, make_diffrax_ode
+from pmesh.pm import ParticleMesh
+from tools.fast_pm import EfficientLeapFrog
+from tools.integrate import integrate
+from tools.ode import DoubleKickODETerm, DriftODETerm, KickODETerm, symplectic_ode
+from tools.semi_implicite_euler import SemiImplicitEuler
 
 jax.config.update("jax_enable_x64", True)
 

@@ -1,30 +1,31 @@
+import os
+import sys
+from functools import partial
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
-
-from diffrax import (
-    SaveAt,
-    ODETerm,
-    diffeqsolve,
-    RecursiveCheckpointAdjoint,
-)
-
+import jax_cosmo.constants as constants
 import numpyro
 import numpyro.distributions as dist
-
-from jax_cosmo.scipy.integrate import simps
+from diffrax import (
+    ODETerm,
+    RecursiveCheckpointAdjoint,
+    SaveAt,
+    diffeqsolve,
+)
 from jax.scipy.ndimage import map_coordinates
-import jax_cosmo.constants as constants
+from jax_cosmo.scipy.integrate import simps
 from jaxdecomp import ShardedArray
-from jaxpm.pm import pm_forces, growth_factor, growth_rate
+from jaxpm.distributed import fft3d, ifft3d, normal_field, uniform_particles
 from jaxpm.kernels import fftk
 from jaxpm.painting import cic_paint_2d
+from jaxpm.pm import growth_factor, growth_rate, pm_forces
 from jaxpm.utils import gaussian_smoothing
-from jaxpm.distributed import fft3d, ifft3d, uniform_particles
-import sys
-import os
-from typing import NamedTuple
-from functools import partial
+from numpyro.distributions import Normal, constraints
+from numpyro.distributions.util import promote_shapes
+from numpyro.util import is_prng_key
 
 parent_dir = os.path.abspath("..")
 sys.path.append(parent_dir)
@@ -331,9 +332,31 @@ class Configurations(NamedTuple):
     fiducial_cosmology: jc.Cosmology
     sigma_e: float
     priors: dict
-    t0 : float
-    dt0 : float
-    t1 : float
+    t0: float
+    dt0: float
+    t1: float
+    sharding: None
+
+
+class DistributedNormal(Normal):
+    arg_constraints = {"loc": constraints.real, "scale": constraints.positive}
+    support = constraints.real
+    reparametrized_params = ["loc", "scale"]
+
+    def __init__(self, loc=0.0, scale=1.0, sharding=None, *, validate_args=None):
+        self.loc, self.scale = promote_shapes(loc, scale)
+        self.sharding = sharding
+        batch_shape = jax.lax.broadcast_shapes(jnp.shape(loc), jnp.shape(scale))
+        super(Normal, self).__init__(
+            batch_shape=batch_shape, validate_args=validate_args
+        )
+
+    def sample(self, key, sample_shape=()):
+        assert is_prng_key(key)
+        eps = normal_field(
+            sample_shape + self.batch_shape + self.event_shape, key, self.sharding
+        )
+        return self.loc + eps * self.scale
 
 
 # Build the probabilistic model
@@ -361,7 +384,9 @@ def full_field_probmodel(config):
         # Sampling the initial conditions
         initial_conditions = numpyro.sample(
             "initial_conditions",
-            dist.Normal(jnp.zeros(config.box_shape), jnp.ones(config.box_shape)),
+            DistributedNormal(
+                jnp.zeros(config.box_shape), jnp.ones(config.box_shape), config.sharding
+            ),
         )
 
         initial_conditions = ShardedArray(initial_conditions)
