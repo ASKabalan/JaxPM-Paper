@@ -1,11 +1,11 @@
+from functools import partial
+from typing import Any, Optional, Tuple
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+from diffrax import AbstractSolver, ODETerm, SaveAt
 from jax import custom_vjp
-from diffrax import ODETerm
-from functools import partial
-from typing import Any, Tuple, Optional
-from diffrax import AbstractSolver, SaveAt
-import equinox as eqx
 from jax._src.numpy.util import promote_dtypes_inexact
 
 
@@ -100,8 +100,8 @@ def integrate(
     )
 
 
-@eqx.filter_custom_vjp
-def integrate_impl(
+
+def _fwd_loop(
     y0_args_ts: Any,
     *,
     terms: Tuple[ODETerm, ...],
@@ -111,23 +111,7 @@ def integrate_impl(
     dt0: float,
     save_y: Any,
 ) -> Any:
-    """
-    Integrates an ODE system from time t0 to t1 using Diffrax's solver,
-    then produces the solution snapshots defined by `saveat`.
 
-    Args:
-        y0: The system's initial state (scalar, array, or a PyTree).
-        args: Parameters for the ODE system (any PyTree).
-        terms: A tuple of `ODETerm`s describing the system dynamics.
-        solver: A `diffrax.AbstractSolver` detailing the integration method.
-        t0: The initial time for integration.
-        t1: The final time for integration.
-        dt0: The step size used for each integration step in a loop.
-        save_y: A `diffrax.SaveAt` indicating how to record solutions.
-
-    Returns:
-        A set of solution snapshots at the specified times in `saveat`.
-    """
     y0, args, ts = y0_args_ts
     args = jax.tree.map(jnp.asarray, args)
 
@@ -163,17 +147,28 @@ def integrate_impl(
     init_carry = (y0, args, t0)
 
     # The outer scan runs over each requested snapshot time
-    _, ys_final = jax.lax.scan(outer_forward_step, init_carry, ts)
+    (y_final , _ , _), ys_final = jax.lax.scan(outer_forward_step, init_carry, ts)
 
     # Return snapshots plus final state+args
-    return ys_final
+    return ys_final , y_final
 
-
-@integrate_impl.def_fwd
-def integrate_fwd(
-    perturbed: Tuple[Any, Any],
+@partial(jax.custom_vjp , nondiff_argnums=(1 , 2 , 3 , 4 , 5 , 6 ))
+def integrate_impl(
     y0_args_ts: Any,
-    *,
+    terms: Tuple[ODETerm, ...],
+    solver: AbstractSolver,
+    t0: float,
+    t1: float,
+    dt0: float,
+    save_y: Any,
+) -> Any:
+
+   ys_final , _ = _fwd_loop(y0_args_ts , terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y)
+   return ys_final
+
+
+def integrate_fwd(
+    y0_args_ts: Any,
     terms: Tuple[ODETerm, ...],
     solver: AbstractSolver,
     t0: float,
@@ -181,76 +176,24 @@ def integrate_fwd(
     dt0: float,
     save_y: Any,
 ) -> Tuple[Any, Tuple[Any, Any]]:
-    """
-    Forward pass for `integrate`. It computes the solution at times requested
-    by `saveat`, in a piecewise manner with a fixed step size dt0.
+    ys_final , y_final = _fwd_loop(y0_args_ts , terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y)
+    _ , args , ts = y0_args_ts
+    return ys_final , (y_final , args , ts)
 
-    This forward pass is structured as:
-      - An "inner" `while_loop` stepping from t0 to t1 in dt0 increments.
-      - An "outer" `scan` loop triggered at each time in `saveat.subs.ts`.
-
-    Args:
-        y0: The initial system state.
-        args: Parameters for the ODE.
-        terms: A tuple of `ODETerm`s defining the system's dynamics.
-        solver: The solver implementing `.step` and `.reverse`.
-        t0: The initial time.
-        t1: The final time.
-        dt0: The integration step size.
-        save_y: The SaveAt object specifying snapshot times and flags.
-
-    Returns:
-        ys_final: Values from `saveat.subs.fn(t, y, args)` at each requested time.
-        (y_final, args): The final state and arguments (used in the backward pass).
-    """
-    ys_final = integrate_impl(
-        y0_args_ts, terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y
-    )
-    y_final = jax.tree.map(lambda x: x[-1], ys_final)
-
-    # Return snapshots plus final state+args
-    return ys_final, y_final
-
-
-@integrate_impl.def_bwd
 def integrate_bwd(
-    residuals: Tuple[Any, Tuple[Any, Any]],
-    cotangents: Any,
-    perturbed: Tuple[Any, Any],
-    y0_args_ts: Any,
-    *,
     terms: Tuple[ODETerm, ...],
     solver: AbstractSolver,
     t0: float,
     t1: float,
     dt0: float,
     save_y: Any,
+    residuals: Tuple[Any, Tuple[Any, Any]],
+    cotangents: Any,
+
 ) -> Tuple[Any, Any]:
-    """
-    Backward pass for `integrate`. Computes adjoints only for y0 and args.
 
-    Because `terms`, `solver`, `t0`, `t1`, `dt0`, and `saveat` are non-differentiable,
-    this backward function only needs to return partial derivatives with respect
-    to y0 and args.
-
-    Args:
-        terms: A tuple of ODETerm objects defining the system (non-differentiable).
-        solver: The solver used for the forward pass (non-differentiable).
-        t0: The initial time (non-differentiable).
-        t1: The final time (non-differentiable).
-        dt0: The step size (non-differentiable).
-        saveat: The SaveAt object used for the forward pass (non-differentiable).
-        residuals: The (y_final, args) from the forward pass.
-        cotangents: The cotangent (adjoint) with respect to the output of `integrate_fwd`.
-
-    Returns:
-        A two-tuple (adj_y, adj_args), representing partial derivatives with respect
-        to y0 and args.
-    """
-
-    _, args, ts = y0_args_ts
-    y_final = residuals
-    ys_ct = cotangents  # Gradient w.r.t. the forward pass snapshots
+    y_final , args, ts = residuals
+    ys_ct  = cotangents  # Gradient w.r.t. the forward pass snapshots
 
     # Initialize adjoint for args and final y
     args = jax.tree.map(jnp.asarray, args)
@@ -349,8 +292,10 @@ def integrate_bwd(
 
     # Return the adjoints for y0 and args. The rest are placeholders (None)
     # matching the custom_vjp signature convention.
-    return (adj_y, adj_args, adj_ts)
+    return (adj_y, adj_args, adj_ts) , 
 
+
+integrate_impl.defvjp(integrate_fwd, integrate_bwd)
 
 def scan_integrate(
     terms: Tuple[ODETerm, ...],
