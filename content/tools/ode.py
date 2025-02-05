@@ -1,8 +1,10 @@
-from jaxpm.pm import pm_forces
-from jaxpm.growth import E, growth_factor as Gp, Gf, dGfa, gp
+import jax
 from diffrax import ODETerm
 from diffrax._custom_types import RealScalarLike
-import jax
+from jaxpm.growth import E, Gf, dGfa, gp
+from jaxpm.growth import growth_factor as Gp
+from jaxpm.pm import pm_forces
+
 
 def symplectic_fpm_ode(mesh_shape, dt0 ,  paint_absolute_pos=True, halo_size=0, sharding=None):
     def drift(a, vel, args):

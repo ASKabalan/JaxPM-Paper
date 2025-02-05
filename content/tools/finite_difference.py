@@ -1,11 +1,11 @@
-import jax.numpy as jnp
-import jax
-from functools import partial
 import operator
+from functools import partial
+
+import jax
+import jax.numpy as jnp
 import numpy as np
 from jax._src import dtypes as _dtypes
 from tqdm import tqdm
-
 
 EPS = 1e-8
 

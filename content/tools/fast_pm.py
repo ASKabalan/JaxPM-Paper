@@ -1,12 +1,11 @@
 from collections.abc import Callable
 from typing import ClassVar
-from typing_extensions import TypeAlias
 
+from diffrax import RESULTS, AbstractSolver, AbstractTerm, LocalLinearInterpolation
+from diffrax._custom_types import VF, Args, BoolScalarLike, DenseInfo, RealScalarLike
 from equinox.internal import ω
 from jaxtyping import ArrayLike, Float, PyTree
-
-from diffrax._custom_types import Args, BoolScalarLike, DenseInfo, RealScalarLike, VF
-from diffrax import LocalLinearInterpolation, RESULTS, AbstractTerm, AbstractSolver
+from typing_extensions import TypeAlias
 
 _ErrorEstimate: TypeAlias = None
 
