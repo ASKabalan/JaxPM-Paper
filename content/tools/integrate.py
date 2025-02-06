@@ -62,6 +62,18 @@ def handle_saveat(save_at: SaveAt, t0: float, t1: float) -> SaveAt:
 
     return save_at
 
+def _clip_to_end(tprev, tnext, t1):
+    tol = 1e-10 if tnext.dtype == jnp.dtype("float64") else 1e-6
+    clip = tnext > t1 - tol
+    return jnp.where(clip, t1, tnext)
+
+
+def _clip_to_start(tprev, tnext, t0):
+    tol = 1e-10 if tprev.dtype == jnp.dtype("float64") else 1e-6
+    clip = tprev < t0 + tol
+    return jnp.where(clip, t0, tprev)
+
+
 
 def integrate(
     terms: Tuple[ODETerm, ...],
@@ -116,6 +128,7 @@ def _fwd_loop(
     def inner_forward_step(carry):
         y, args_, tc, t1 = carry
         t_next = tc + dt0
+        t_next = _clip_to_end(tc, t_next, t1)
         # The solver call returns (y_next, solver_state, new_t, result, made_jump)
         y_next, _, _, _, _ = solver.step(
             terms, tc, t_next, y, args_, solver_state=None, made_jump=False
@@ -210,6 +223,7 @@ def integrate_bwd(
         y, diff_args, adj_y, adj_args, t0_, tc = carry
 
         t_prev = tc - dt0
+        t_prev = _clip_to_start(t_prev, tc, t0_)
         # Reverse the forward step
         y_prev = solver.reverse(
             terms, t_prev, tc, y, args, solver_state=None, made_jump=False
@@ -236,6 +250,7 @@ def integrate_bwd(
         Continue stepping backward as long as the current time remains above t0.
         """
         _, _, _, _, t0_, tc = carry
+        jax.debug.print("in BWD COND t0 is {t0} tc {tc}" , t0=t0_,tc=tc)
         return tc > t0_
 
     def outer_backward_step(outer_carry, vals):
@@ -245,6 +260,8 @@ def integrate_bwd(
         """
         y_ct, t0_ = vals
         y, diff_args, adj_y, adj_args, adj_ts, tc = outer_carry
+
+        jax.debug.print("BWD OUTER STEP t0 is {t0} tc {tc}" , t0=t0_,tc=tc)
 
         # Differentiate the "save function" at snapshot time `tc`:
         def _to_vjp(tc_, y_, diff_args_):
@@ -280,7 +297,6 @@ def integrate_bwd(
 
     # We'll pair up the cotangents with the times
     vals = (ys_ct, t_steps)
-
     # Perform the reverse scan over the snapshots
     (_, _, adj_y, adj_args, adj_ts, _), _ = jax.lax.scan(
         outer_backward_step, init_carry, vals, reverse=True
