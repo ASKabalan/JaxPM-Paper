@@ -93,7 +93,9 @@ def make_full_field_model(field_size, field_npix, box_shape, box_size, halo_size
         # Create a small function to generate the matter power spectrum
         k = jnp.logspace(-4, 1, 128)
         pk = jc.power.linear_matter_power(cosmo, k)
-        pk_fn = lambda x: jc.scipy.interpolate.interp(x.reshape([-1]), k, pk).reshape(x.shape)
+
+        def pk_fn(x):
+            return jc.scipy.interpolate.interp(x.reshape([-1]), k, pk).reshape(x.shape)
 
         # Create initial conditions
         lin_field = linear_field(box_shape, box_size, pk_fn, initial_conditions)
@@ -193,7 +195,7 @@ def full_field_probmodel(config):
     # Define the likelihood of observations
     observed_maps = [
         numpyro.sample(
-            "kappa_%d" % i,
+            f"kappa_{i}",
             dist.Normal(
                 k,
                 config.sigma_e

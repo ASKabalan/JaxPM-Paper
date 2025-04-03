@@ -82,7 +82,9 @@ def make_full_field_model(field_size, field_npix, box_shape, box_size):
         # Create a small function to generate the matter power spectrum
         k = jnp.logspace(-4, 1, 128)
         pk = jc.power.linear_matter_power(cosmo, k)
-        pk_fn = lambda x: jc.scipy.interpolate.interp(x.reshape([-1]), k, pk).reshape(x.shape)
+
+        def pk_fn(x):
+            return jc.scipy.interpolate.interp(x.reshape([-1]), k, pk).reshape(x.shape)
 
         # Create initial conditions
         lin_field = linear_field(box_shape, box_size, pk_fn, initial_conditions)
@@ -172,7 +174,7 @@ def full_field_probmodel(config):
     # Define the likelihood of observations
     observed_maps = [
         numpyro.sample(
-            "kappa_%d" % i,
+            f"kappa_{i}",
             dist.Normal(
                 k,
                 config.sigma_e
@@ -212,7 +214,7 @@ def pixel_window_function(l, pixel_size_arcmin):
 
 def make_2pt_model(pixel_scale, ell, sigma_e=0.3):
     """
-    Create a function that computes the theoretical 2-point correlation function 
+    Create a function that computes the theoretical 2-point correlation function
     for a given cosmology and redshift distribution.
 
     Parameters:
@@ -220,7 +222,7 @@ def make_2pt_model(pixel_scale, ell, sigma_e=0.3):
     - ell: Angular wave number (numpy array).
 
     Returns:
-    - forward_model: Function that computes the theoretical 2-point correlation function 
+    - forward_model: Function that computes the theoretical 2-point correlation function
                      for a given cosmology and redshift distribution.
     """
 

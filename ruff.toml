@@ -13,3 +13,6 @@ fix = true
 include = ["*.py", "*.ipynb"]
 exclude = ["notebooks"]
 
+ignore = [
+    "E501",  # Line too long
+]

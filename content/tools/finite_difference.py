@@ -27,7 +27,7 @@ def inner_prod(xs, ys):
 
 
 def is_python_scalar(val):
-    return not isinstance(val, np.generic) and isinstance(val, (bool, int, float, complex))
+    return not isinstance(val, np.generic) and isinstance(val, bool | int | float | complex)
 
 
 def _safe_subtract(x, y, *, dtype):

@@ -363,7 +363,7 @@ def full_field_probmodel(config):
         # Define the likelihood of observations
         observed_maps = [
             numpyro.sample(
-                "kappa_%d" % i,
+                f"kappa_{i}",
                 dist.Normal(
                     k,
                     config.sigma_e
