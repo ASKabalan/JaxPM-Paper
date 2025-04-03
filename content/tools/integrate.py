@@ -1,11 +1,10 @@
 from functools import partial
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from diffrax import AbstractSolver, ODETerm, SaveAt
-from jax import custom_vjp
 from jax._src.numpy.util import promote_dtypes_inexact
 
 
@@ -62,6 +61,7 @@ def handle_saveat(save_at: SaveAt, t0: float, t1: float) -> SaveAt:
 
     return save_at
 
+
 def _clip_to_end(tprev, tnext, t1):
     tol = 1e-10 if tnext.dtype == jnp.dtype("float64") else 1e-6
     clip = tnext > t1 - tol
@@ -74,16 +74,15 @@ def _clip_to_start(tprev, tnext, t0):
     return jnp.where(clip, t0, tprev)
 
 
-
 def integrate(
-    terms: Tuple[ODETerm, ...],
+    terms: tuple[ODETerm, ...],
     solver: AbstractSolver,
     t0: float,
     t1: float,
     dt0: float,
     y0: Any,
     args: Any,
-    saveat: Optional[SaveAt] = SaveAt(t1=True),
+    saveat: SaveAt | None = SaveAt(t1=True),
 ) -> Any:
     """
     Uses Diffrax's solver to integrate an ODE system from time t0 to t1,
@@ -111,17 +110,17 @@ def integrate(
         y0_args_ts, terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y
     )
 
+
 def _fwd_loop(
     y0_args_ts: Any,
     *,
-    terms: Tuple[ODETerm, ...],
+    terms: tuple[ODETerm, ...],
     solver: AbstractSolver,
     t0: float,
     t1: float,
     dt0: float,
     save_y: Any,
 ) -> Any:
-
     y0, args, ts = y0_args_ts
     args = jax.tree.map(jnp.asarray, args)
 
@@ -147,9 +146,8 @@ def _fwd_loop(
         """
         y, args_, t0 = outer_carry
         inner_carry = (y, args_, t0, t1)
-        y, _, _, _ = jax.lax.while_loop(
-            inner_forward_cond, inner_forward_step, inner_carry
-        )
+        y, _, _, _ = jax.lax.while_loop(inner_forward_cond, inner_forward_step, inner_carry)
+
         outer_carry = (y, args_, t1)
         # Apply the user-defined function at this "snapshot" time
         return outer_carry, save_y(t1, y, args_)
@@ -158,53 +156,56 @@ def _fwd_loop(
     init_carry = (y0, args, t0)
 
     # The outer scan runs over each requested snapshot time
-    (y_final , _ , _), ys_final = jax.lax.scan(outer_forward_step, init_carry, ts)
+    (y_final, _, _), ys_final = jax.lax.scan(outer_forward_step, init_carry, ts)
 
     # Return snapshots plus final state+args
-    return ys_final , y_final
+    return ys_final, y_final
 
-@partial(jax.custom_vjp , nondiff_argnums=(1 , 2 , 3 , 4 , 5 , 6 ))
+
+@partial(jax.custom_vjp, nondiff_argnums=(1, 2, 3, 4, 5, 6))
 def integrate_impl(
     y0_args_ts: Any,
-    terms: Tuple[ODETerm, ...],
+    terms: tuple[ODETerm, ...],
     solver: AbstractSolver,
     t0: float,
     t1: float,
     dt0: float,
     save_y: Any,
 ) -> Any:
-
-   ys_final , _ = _fwd_loop(y0_args_ts , terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y)
-   return ys_final
+    ys_final, _ = _fwd_loop(
+        y0_args_ts, terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y
+    )
+    return ys_final
 
 
 def integrate_fwd(
     y0_args_ts: Any,
-    terms: Tuple[ODETerm, ...],
+    terms: tuple[ODETerm, ...],
     solver: AbstractSolver,
     t0: float,
     t1: float,
     dt0: float,
     save_y: Any,
-) -> Tuple[Any, Tuple[Any, Any]]:
-    ys_final , y_final = _fwd_loop(y0_args_ts , terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y)
-    _ , args , ts = y0_args_ts
-    return ys_final , (y_final , args , ts)
+) -> tuple[Any, tuple[Any, Any]]:
+    ys_final, y_final = _fwd_loop(
+        y0_args_ts, terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y
+    )
+    _, args, ts = y0_args_ts
+    return ys_final, (y_final, args, ts)
+
 
 def integrate_bwd(
-    terms: Tuple[ODETerm, ...],
+    terms: tuple[ODETerm, ...],
     solver: AbstractSolver,
     t0: float,
     t1: float,
     dt0: float,
     save_y: Any,
-    residuals: Tuple[Any, Tuple[Any, Any]],
+    residuals: tuple[Any, tuple[Any, Any]],
     cotangents: Any,
-
-) -> Tuple[Any, Any]:
-
-    y_final , args, ts = residuals
-    ys_ct  = cotangents  # Gradient w.r.t. the forward pass snapshots
+) -> tuple[Any, Any]:
+    y_final, args, ts = residuals
+    ys_ct = cotangents  # Gradient w.r.t. the forward pass snapshots
 
     # Initialize adjoint for args and final y
     args = jax.tree.map(jnp.asarray, args)
@@ -213,7 +214,7 @@ def integrate_bwd(
 
     adj_y = jax.tree_map(lambda x: jnp.zeros_like(x), y_final)
     adj_args = jax.tree_map(lambda x: jnp.zeros_like(x), diff_args)
-    adj_ts = jax.tree_map(lambda x: jnp.zeros_like(x), ts)
+    adj_ts = jax.tree_map(lambda x: jnp.zeros_like(x), ts[0])
 
     def inner_backward_step(carry):
         """
@@ -225,9 +226,7 @@ def integrate_bwd(
         t_prev = tc - dt0
         t_prev = _clip_to_start(t_prev, tc, t0_)
         # Reverse the forward step
-        y_prev = solver.reverse(
-            terms, t_prev, tc, y, args, solver_state=None, made_jump=False
-        )
+        y_prev = solver.reverse(terms, t_prev, tc, y, args, solver_state=None, made_jump=False)
 
         # Differentiate with respect to the "forward step" to obtain partial derivatives.
         def _to_vjp(y, diff_args):
@@ -250,7 +249,6 @@ def integrate_bwd(
         Continue stepping backward as long as the current time remains above t0.
         """
         _, _, _, _, t0_, tc = carry
-        jax.debug.print("in BWD COND t0 is {t0} tc {tc}" , t0=t0_,tc=tc)
         return tc > t0_
 
     def outer_backward_step(outer_carry, vals):
@@ -261,28 +259,50 @@ def integrate_bwd(
         y_ct, t0_ = vals
         y, diff_args, adj_y, adj_args, adj_ts, tc = outer_carry
 
-        jax.debug.print("BWD OUTER STEP t0 is {t0} tc {tc}" , t0=t0_,tc=tc)
+        t_prev = tc - dt0
+        t_prev = _clip_to_start(t_prev, tc, t0_)
+
+        # Reverse the forward step
+        y_prev = solver.reverse(terms, t_prev, tc, y, args, solver_state=None, made_jump=False)
 
         # Differentiate the "save function" at snapshot time `tc`:
-        def _to_vjp(tc_, y_, diff_args_):
+        def _to_vjp_snap(tc_, y_, diff_args_):
             args_ = eqx.combine(diff_args_, nondiff_args)
             return save_y(tc_, y_, args_)
 
-        _, f_vjp = jax.vjp(_to_vjp, tc, y, diff_args)
-        new_adj_ts, new_adj_y, new_adj_args = f_vjp(y_ct)
+        def _to_vjp_step(tc_, y, diff_args):
+            t_prev = tc - dt0
+            t_prev = _clip_to_start(t_prev, tc, t0_)
+            jax.debug.print("y_ct is {y_ct}", y_ct=y_ct, ordered=True)
+            jax.debug.print("t0 is {t_prev} and t1 is {tc_}", t_prev=t_prev, tc_=tc_, ordered=True)
+            args_ = eqx.combine(diff_args, nondiff_args)
+            y_next, _, _, _, _ = solver.step(
+                terms, t_prev, tc_, y, args_, solver_state=None, made_jump=False
+            )
+            return y_next
+
+        _, f_vjp_snap = jax.vjp(_to_vjp_snap, tc, y, diff_args)
+        _, f_vjp_step = jax.vjp(_to_vjp_step, tc, y_prev, diff_args)
+        snap_adj_ts, new_adj_y, new_adj_args = f_vjp_snap(y_ct)
 
         adj_y = jax.tree.map(jnp.add, adj_y, new_adj_y)
         adj_args = jax.tree.map(jnp.add, adj_args, new_adj_args)
-        adj_ts = jax.tree.map(jnp.add, adj_ts, new_adj_ts)
 
-        # Now step backward in increments of dt0 from the current snapshot time down to snap_t0_
-        inner_carry = (y, diff_args, adj_y, adj_args, t0_, tc)
+        step_adj_ts, adj_y, new_adj_args = f_vjp_step(adj_y)
+        step_adj_ts = jnp.where(tc == t0, jnp.zeros_like(step_adj_ts), step_adj_ts)
+
+        adj_args = jax.tree.map(jnp.add, adj_args, new_adj_args)
+        f_adj_ts = jax.tree.map(jnp.add, snap_adj_ts, step_adj_ts)
+
+        inner_carry = (y_prev, diff_args, adj_y, adj_args, t0_, t_prev)
         y_prev, diff_args, adj_y, adj_args, tc, _ = jax.lax.while_loop(
             inner_backward_cond, inner_backward_step, inner_carry
         )
 
-        outer_carry = (y_prev, diff_args, adj_y, adj_args, adj_ts, tc)
-        return outer_carry, None
+        adj_subs = jax.tree.map(jnp.subtract, f_adj_ts, adj_ts)
+
+        outer_carry = (y_prev, diff_args, adj_y, adj_args, step_adj_ts, tc)
+        return outer_carry, adj_subs
 
     # Reverse through the snapshot times
 
@@ -298,7 +318,7 @@ def integrate_bwd(
     # We'll pair up the cotangents with the times
     vals = (ys_ct, t_steps)
     # Perform the reverse scan over the snapshots
-    (_, _, adj_y, adj_args, adj_ts, _), _ = jax.lax.scan(
+    (_, _, adj_y, adj_args, _, _), adj_ts = jax.lax.scan(
         outer_backward_step, init_carry, vals, reverse=True
     )
     zero_nondiff = jax.tree_map(jnp.zeros_like, nondiff_args)
@@ -306,20 +326,21 @@ def integrate_bwd(
 
     # Return the adjoints for y0 and args. The rest are placeholders (None)
     # matching the custom_vjp signature convention.
-    return (adj_y, adj_args, adj_ts) , 
+    return ((adj_y, adj_args, adj_ts),)
 
 
 integrate_impl.defvjp(integrate_fwd, integrate_bwd)
 
+
 def scan_integrate(
-    terms: Tuple[ODETerm, ...],
+    terms: tuple[ODETerm, ...],
     solver: AbstractSolver,
     t0: float,
     t1: float,
     dt0: float,
     y0: Any,
     args: Any,
-    saveat: Optional[SaveAt] = None,
+    saveat: SaveAt | None = None,
 ) -> Any:
     """
     A "vanilla" scanning integrator that advances from t0 to t1 in uniform dt0 steps,
@@ -342,36 +363,12 @@ def scan_integrate(
     Returns:
         A PyTree of solutions at the requested snapshot times.
     """
-
-    def forward_step(carry, t):
-        y, args_ = carry
-        t_next = t + dt0
-        # Perform a single forward integration step
-        y_next, _, _, _, _ = solver.step(
-            terms, t, t_next, y, args_, solver_state=None, made_jump=False
-        )
-        # Store the current state and time for the backward pass.
-        return (y_next, args_), y_next
-
-    if saveat is None:
-        saveat = SaveAt(ts=[t1])
-
-    # Prepare the main scan
-    init_carry = (y0, args)
-    t_steps = jnp.arange(t0, t1, dt0)
-
-    # Perform the integration using jax.lax.scan
-    (_, _), ys = jax.lax.scan(forward_step, init_carry, t_steps)
-
-    # Add the initial state to the beginning of the scanned sequence.
-    ys = jax.tree_map(
-        lambda y0_, ys_: jnp.concatenate((jnp.asarray(y0_)[None, ...], ys_), axis=0),
-        y0,
-        ys,
-    )
-
-    # Extract the requested snapshot times from the results.
     saveat = handle_saveat(saveat, t0, t1)
-    snapshots = saveat.subs.ts
-    snapshots = ((snapshots - t0) / dt0).astype(jnp.int32)
-    return jax.tree_map(lambda x: x[snapshots], ys)
+    save_y = saveat.subs.fn
+    ts = saveat.subs.ts
+    (ts,) = promote_dtypes_inexact(ts)
+    y0_args_ts = (y0, args, ts)
+    ys_final, _ = _fwd_loop(
+        y0_args_ts, terms=terms, solver=solver, t0=t0, t1=t1, dt0=dt0, save_y=save_y
+    )
+    return ys_final

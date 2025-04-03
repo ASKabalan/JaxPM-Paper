@@ -31,8 +31,8 @@ parent_dir = os.path.abspath("..")
 sys.path.append(parent_dir)
 
 from tools.integrate import integrate as reverse_adjoint_integrate  # noqa : E402
-from tools.semi_implicite_euler import SemiImplicitEuler  # noqa : E402
 from tools.ode import symplectic_fpm_ode  # noqa : E402
+from tools.semi_implicite_euler import SemiImplicitEuler  # noqa : E402
 
 Planck18 = partial(
     jc.Cosmology,
@@ -97,9 +97,7 @@ def linear_field(mesh_shape, box_size, pk, field):
     # Initialize a random field with one slice on each gpu
     field = fft3d(field)
     kvec = fftk(field)
-    kmesh = (
-        sum((kk / box_size[i] * mesh_shape[i]) ** 2 for i, kk in enumerate(kvec)) ** 0.5
-    )
+    kmesh = sum((kk / box_size[i] * mesh_shape[i]) ** 2 for i, kk in enumerate(kvec)) ** 0.5
     pkmesh = (
         pk(kmesh)
         * (mesh_shape[0] * mesh_shape[1] * mesh_shape[2])
@@ -117,9 +115,7 @@ def lpt_lightcone(cosmo, initial_conditions, a, mesh_shape):
         lambda ic: jnp.zeros_like(ic, shape=(*ic.shape, 3)), initial_conditions
     )
 
-    initial_force = pm_forces(
-        particles, delta=initial_conditions, paint_absolute_pos=False
-    )
+    initial_force = pm_forces(particles, delta=initial_conditions, paint_absolute_pos=False)
     a = jnp.atleast_1d(a)
     dx = growth_factor(cosmo, a).reshape([1, 1, -1, 1]) * initial_force
     p = (a**2 * growth_rate(cosmo, a) * E(cosmo, a) * growth_factor(cosmo, a)).reshape(
@@ -130,14 +126,10 @@ def lpt_lightcone(cosmo, initial_conditions, a, mesh_shape):
 
 def integrate(terms, solver, t0, t1, dt0, y0, args, saveat, adjoint):
     if isinstance(adjoint, RecursiveCheckpointAdjoint):
-        solution = diffeqsolve(
-            terms, solver, t0, t1, dt0, y0, args, saveat=saveat, adjoint=adjoint
-        )
+        solution = diffeqsolve(terms, solver, t0, t1, dt0, y0, args, saveat=saveat, adjoint=adjoint)
         return solution.ys, saveat.subs.ts
     else:
-        solution = reverse_adjoint_integrate(
-            terms, solver, t0, t1, dt0, y0, args, saveat
-        )
+        solution = reverse_adjoint_integrate(terms, solver, t0, t1, dt0, y0, args, saveat)
         return solution, saveat.subs.ts
 
 
@@ -161,11 +153,7 @@ def make_full_field_model(
 
         # Converts time t to comoving distance in voxel coordinates
         w = density_plane_width / box_size[2] * box_shape[2]
-        center = (
-            jc.background.radial_comoving_distance(cosmo, t)
-            / box_size[2]
-            * box_shape[2]
-        )
+        center = jc.background.radial_comoving_distance(cosmo, t) / box_size[2] * box_shape[2]
         positions = uniform_particles(box_shape) + positions
         xy = positions[..., :2]
         d = positions[..., 2]
@@ -177,21 +165,15 @@ def make_full_field_model(
         xy = xy / nx * density_plane_npix
         # Selecting only particles that fall inside the volume of interest
         weight = jax.tree.map(
-            lambda x: jnp.where(
-                (d > (center - w / 2)) & (d <= (center + w / 2)), 1.0, 0.0
-            ),
+            lambda x: jnp.where((d > (center - w / 2)) & (d <= (center + w / 2)), 1.0, 0.0),
             d,
         )
         # Painting density plane
-        zero_mesh = jax.tree.map(
-            lambda _: jnp.zeros([density_plane_npix, density_plane_npix]), xy
-        )
+        zero_mesh = jax.tree.map(lambda _: jnp.zeros([density_plane_npix, density_plane_npix]), xy)
         density_plane = cic_paint_2d(zero_mesh, xy, weight)
 
         # Apply density normalization
-        density_plane = density_plane / (
-            (nx / density_plane_npix) * (ny / density_plane_npix) * w
-        )
+        density_plane = density_plane / ((nx / density_plane_npix) * (ny / density_plane_npix) * w)
         return density_plane
 
     def forward_model(cosmo, nz_shear, initial_conditions):
@@ -201,9 +183,7 @@ def make_full_field_model(
 
         def pk_fn(x):
             return jax.tree.map(
-                lambda x: jc.scipy.interpolate.interp(x.reshape([-1]), k, pk).reshape(
-                    x.shape
-                ),
+                lambda x: jc.scipy.interpolate.interp(x.reshape([-1]), k, pk).reshape(x.shape),
                 x,
             )
 
@@ -229,9 +209,7 @@ def make_full_field_model(
         assert density_plane_npix is not None
 
         density_plane_smoothing = 0.1
-        drift, kick, first_kick = symplectic_fpm_ode(
-            box_shape, dt0=dt0, paint_absolute_pos=False
-        )
+        drift, kick, first_kick = symplectic_fpm_ode(box_shape, dt0=dt0, paint_absolute_pos=False)
         first_term = ODETerm(first_kick)
         ode_terms = ODETerm(drift), ODETerm(kick)
 
@@ -264,35 +242,27 @@ def make_full_field_model(
         dx = box_size[0] / density_plane_npix
         dz = density_plane_width
 
-        lightcone = jax.vmap(
-            lambda x: gaussian_smoothing(x, density_plane_smoothing / dx)
-        )(solution)
+        lightcone = jax.vmap(lambda x: gaussian_smoothing(x, density_plane_smoothing / dx))(
+            solution
+        )
         lightcone = lightcone[::-1]
         a = ts[::-1]
-        lightcone = jax.tree.map(
-            lambda lc: jnp.transpose(lc, axes=(1, 2, 0)), lightcone
-        )
+        lightcone = jax.tree.map(lambda lc: jnp.transpose(lc, axes=(1, 2, 0)), lightcone)
 
         # Defining the coordinate grid for lensing map
         xgrid, ygrid = jnp.meshgrid(
-            jnp.linspace(
-                0, field_size, box_shape[0], endpoint=False
-            ),  # range of X coordinates
+            jnp.linspace(0, field_size, box_shape[0], endpoint=False),  # range of X coordinates
             jnp.linspace(0, field_size, box_shape[1], endpoint=False),
         )  # range of Y coordinates
 
         # coords       = jnp.array((jnp.stack([xgrid, ygrid], axis=0)*u.deg).to(u.rad))
-        coords = jnp.array(
-            (jnp.stack([xgrid, ygrid], axis=0)) * 0.017453292519943295
-        )  # deg->rad
+        coords = jnp.array((jnp.stack([xgrid, ygrid], axis=0)) * 0.017453292519943295)  # deg->rad
 
         # Generate convergence maps by integrating over nz and source planes
         convergence_maps = [
             simps(
                 lambda z: nz(z).reshape([-1, 1, 1])
-                * convergence_Born(
-                    cosmo, lightcone.data, r_center, a, dx, dz, coords, z
-                ),
+                * convergence_Born(cosmo, lightcone.data, r_center, a, dx, dz, coords, z),
                 0.01,
                 3.0,
                 N=32,
@@ -347,15 +317,11 @@ class DistributedNormal(Normal):
         self.loc, self.scale = promote_shapes(loc, scale)
         self.sharding = sharding
         batch_shape = jax.lax.broadcast_shapes(jnp.shape(loc), jnp.shape(scale))
-        super(Normal, self).__init__(
-            batch_shape=batch_shape, validate_args=validate_args
-        )
+        super(Normal, self).__init__(batch_shape=batch_shape, validate_args=validate_args)
 
     def sample(self, key, sample_shape=()):
         assert is_prng_key(key)
-        eps = normal_field(
-            sample_shape + self.batch_shape + self.event_shape, key, self.sharding
-        )
+        eps = normal_field(sample_shape + self.batch_shape + self.event_shape, key, self.sharding)
         return self.loc + eps * self.scale
 
 
@@ -451,9 +417,7 @@ def make_2pt_model(pixel_scale, ell, sigma_e=0.3):
 
     def forward_model(cosmo, nz_shear):
         tracer = jc.probes.WeakLensing(nz_shear, sigma_e=sigma_e)
-        cell_theory = jc.angular_cl.angular_cl(
-            cosmo, ell, [tracer], nonlinear_fn=jc.power.linear
-        )
+        cell_theory = jc.angular_cl.angular_cl(cosmo, ell, [tracer], nonlinear_fn=jc.power.linear)
         cell_theory = cell_theory * pixel_window_function(ell, pixel_scale)
         cell_noise = jc.angular_cl.noise_cl(ell, [tracer])
         return cell_theory, cell_noise

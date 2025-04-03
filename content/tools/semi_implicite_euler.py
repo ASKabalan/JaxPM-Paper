@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import ClassVar
+from typing import ClassVar, TypeAlias
 
 from diffrax import AbstractSolver
 from diffrax._custom_types import VF, Args, BoolScalarLike, DenseInfo, RealScalarLike
@@ -8,13 +8,13 @@ from diffrax._solution import RESULTS
 from diffrax._term import AbstractTerm
 from equinox.internal import ω
 from jaxtyping import ArrayLike, Float, PyTree
-from typing_extensions import TypeAlias
 
 _ErrorEstimate: TypeAlias = None
 _SolverState: TypeAlias = None
 
 Ya: TypeAlias = PyTree[Float[ArrayLike, "?*y"], " Y"]
 Yb: TypeAlias = PyTree[Float[ArrayLike, "?*y"], " Y"]
+
 
 class SemiImplicitEuler(AbstractSolver):
     """Semi-implicit Euler's method.
@@ -24,9 +24,7 @@ class SemiImplicitEuler(AbstractSolver):
     """
 
     term_structure: ClassVar = (AbstractTerm, AbstractTerm)
-    interpolation_cls: ClassVar[
-        Callable[..., LocalLinearInterpolation]
-    ] = LocalLinearInterpolation
+    interpolation_cls: ClassVar[Callable[..., LocalLinearInterpolation]] = LocalLinearInterpolation
 
     def order(self, terms):
         return 1
@@ -41,13 +39,13 @@ class SemiImplicitEuler(AbstractSolver):
     ) -> _SolverState:
         return None
 
-    def first_step(self , term , t0 , dt0 , y0 , args):
+    def first_step(self, term, t0, dt0, y0, args):
         t1 = t0 + dt0
         control = term.contr(t0, t1)
         y0_1, y0_2 = y0
 
         y1_2 = (y0_2**ω + term.vf_prod(t0, y0_1, args, control) ** ω).ω
-        
+
         return (y0_1, y1_2)
 
     def step(
@@ -67,18 +65,14 @@ class SemiImplicitEuler(AbstractSolver):
 
         control1 = term_1.contr(t0, t1)
         control2 = term_2.contr(t0, t1)
-
-
         y1_1 = (y0_1**ω + term_1.vf_prod(t0, y0_2, args, control1) ** ω).ω
         y1_2 = (y0_2**ω + term_2.vf_prod(t0, y1_1, args, control2) ** ω).ω
-
 
         y1 = (y1_1, y1_2)
 
         dense_info = dict(y0=y0, y1=y1)
         return y1, None, dense_info, None, RESULTS.successful
 
-    
     def reverse(
         self,
         terms: tuple[AbstractTerm, AbstractTerm],
@@ -96,16 +90,12 @@ class SemiImplicitEuler(AbstractSolver):
         control1 = term_1.contr(t0, t1)
         control2 = term_2.contr(t0, t1)
 
-
-
         y0_2 = (y1_2**ω - term_2.vf_prod(t0, y1_1, args, control2) ** ω).ω
         y0_1 = (y1_1**ω - term_1.vf_prod(t0, y0_2, args, control1) ** ω).ω
 
         y0 = (y0_1, y0_2)
 
-
         return y0
-
 
     def func(
         self,

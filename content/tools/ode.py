@@ -1,4 +1,3 @@
-import jax
 from diffrax import ODETerm
 from diffrax._custom_types import RealScalarLike
 from jaxpm.growth import E, Gf, dGfa, gp
@@ -6,7 +5,7 @@ from jaxpm.growth import growth_factor as Gp
 from jaxpm.pm import pm_forces
 
 
-def symplectic_fpm_ode(mesh_shape, dt0 ,  paint_absolute_pos=True, halo_size=0, sharding=None):
+def symplectic_fpm_ode(mesh_shape, dt0, paint_absolute_pos=True, halo_size=0, sharding=None):
     def drift(a, vel, args):
         """
         state is a tuple (position, velocities)
@@ -56,9 +55,9 @@ def symplectic_fpm_ode(mesh_shape, dt0 ,  paint_absolute_pos=True, halo_size=0, 
         # Computes the update of velocity (kick)
         dvel = 1.0 / (ac**2 * E(cosmo, ac)) * forces
         # First kick control factor
-        kick_factor_1 = (Gf(cosmo, t1)   - Gf(cosmo, t0t1)) / dGfa(cosmo, t1)
+        kick_factor_1 = (Gf(cosmo, t1) - Gf(cosmo, t0t1)) / dGfa(cosmo, t1)
         # Second kick control factor
-        kick_factor_2 = (Gf(cosmo, t1t2) - Gf(cosmo, t1))   / dGfa(cosmo, t1)
+        kick_factor_2 = (Gf(cosmo, t1t2) - Gf(cosmo, t1)) / dGfa(cosmo, t1)
 
         return dvel * ((kick_factor_1 + kick_factor_2) / dt0)
 
@@ -88,11 +87,11 @@ def symplectic_fpm_ode(mesh_shape, dt0 ,  paint_absolute_pos=True, halo_size=0, 
         # Computes the update of velocity (kick)
         dvel = 1.0 / (a**2 * E(cosmo, a)) * forces
         # First kick control factor
-        kick_factor = (Gf(cosmo, t0t1) - Gf(cosmo, t0))   / dGfa(cosmo, t0)
+        kick_factor = (Gf(cosmo, t0t1) - Gf(cosmo, t0)) / dGfa(cosmo, t0)
 
         return dvel * (kick_factor / dt0)
 
-    return drift, kick  , first_kick
+    return drift, kick, first_kick
 
 
 def symplectic_ode(mesh_shape, paint_absolute_pos=True, halo_size=0, sharding=None):
@@ -128,11 +127,9 @@ def symplectic_ode(mesh_shape, paint_absolute_pos=True, halo_size=0, sharding=No
         # Computes the update of velocity (kick)
         dvel = 1.0 / (a**2 * E(cosmo, a)) * forces
 
-
         return dvel
 
     return drift, kick
-
 
 
 class DriftODETerm(ODETerm):
@@ -143,7 +140,7 @@ class DriftODETerm(ODETerm):
         if cosmo is None:
             return 0.0
 
-        factor =  (Gp(cosmo, t1) - Gp(cosmo, t0)) / gp(cosmo, t0t1)
+        factor = (Gp(cosmo, t1) - Gp(cosmo, t0)) / gp(cosmo, t0t1)
 
         return factor
 
@@ -158,11 +155,11 @@ class DoubleKickODETerm(ODETerm):
 
         t2 = 2 * t1 - t0  # Next time step t2 for the second kick
         t1t2 = (t1 * t2) ** 0.5  # Intermediate scale factor
-        kick_factor_1 = (Gf(cosmo, t1)   - Gf(cosmo, t0t1)) / dGfa(cosmo, t1)
-        kick_factor_2 = (Gf(cosmo, t1t2) - Gf(cosmo, t1))   / dGfa(cosmo, t1)
+        kick_factor_1 = (Gf(cosmo, t1) - Gf(cosmo, t0t1)) / dGfa(cosmo, t1)
+        kick_factor_2 = (Gf(cosmo, t1t2) - Gf(cosmo, t1)) / dGfa(cosmo, t1)
 
         return kick_factor_1 + kick_factor_2
-               
+
 
 class KickODETerm(ODETerm):
     def contr(self, t0: RealScalarLike, t1: RealScalarLike, **kwargs) -> RealScalarLike:
@@ -175,4 +172,3 @@ class KickODETerm(ODETerm):
         kick_factor =  (Gf(cosmo, t0t1) - Gf(cosmo, t0))   / dGfa(cosmo, t0)  # fmt: skip
 
         return kick_factor
-               

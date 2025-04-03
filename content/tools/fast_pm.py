@@ -1,11 +1,10 @@
 from collections.abc import Callable
-from typing import ClassVar
+from typing import ClassVar, TypeAlias
 
 from diffrax import RESULTS, AbstractSolver, AbstractTerm, LocalLinearInterpolation
 from diffrax._custom_types import VF, Args, BoolScalarLike, DenseInfo, RealScalarLike
 from equinox.internal import ω
 from jaxtyping import ArrayLike, Float, PyTree
-from typing_extensions import TypeAlias
 
 _ErrorEstimate: TypeAlias = None
 
@@ -14,16 +13,16 @@ Yb: TypeAlias = PyTree[Float[ArrayLike, "y"]]
 
 _SolverState: TypeAlias = tuple[Ya, Yb]
 
+
 class EfficientLeapFrog(AbstractSolver):
     """Semi-implicit Euler's method.
 
     Symplectic method. Does not support adaptive step sizing. Uses 1st order local
     linear interpolation for dense/ts output.
     """
+
     term_structure: ClassVar = (AbstractTerm, AbstractTerm)
-    interpolation_cls: ClassVar[Callable[..., LocalLinearInterpolation]] = (
-        LocalLinearInterpolation
-    )
+    interpolation_cls: ClassVar[Callable[..., LocalLinearInterpolation]] = LocalLinearInterpolation
 
     def order(self, terms):
         return 2
@@ -38,14 +37,14 @@ class EfficientLeapFrog(AbstractSolver):
     ) -> _SolverState:
         return None
 
-    def first_step(self , term , t0 , dt0 , y0 , args):
+    def first_step(self, term, t0, dt0, y0, args):
         t1 = t0 + dt0
         cosmo = args[0]
         control = term.contr(t0, t1, cosmo=cosmo)
         y0_1, y0_2 = y0
 
         y1_2 = (y0_2**ω + term.vf_prod(t0, y0_1, args, control) ** ω).ω
-        
+
         return (y0_1, y1_2)
 
     def step(
@@ -75,7 +74,6 @@ class EfficientLeapFrog(AbstractSolver):
         y1 = (y1_1, y1_2)
         dense_info = dict(y0=y0, y1=y1)
         return y1, None, dense_info, solver_state, RESULTS.successful
-
 
     def reverse(
         self,

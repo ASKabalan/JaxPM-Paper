@@ -54,9 +54,7 @@ ADJOINTS = ["RECURSIVE", "BACKSOLVE", "REVERSE"]
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Run N-body simulation with given parameters."
-    )
+    parser = argparse.ArgumentParser(description="Run N-body simulation with given parameters.")
     parser.add_argument(
         "-m",
         "--mesh_shape",
@@ -137,18 +135,14 @@ def run_nbody(
     elif len(terms) == 3:
         *terms, first_kick_term = terms
         y0 = (dx, p)
-        y0 = solver.first_step(
-            first_kick_term, t0=0.1, dt0=step_size, y0=y0, args=cosmo
-        )
+        y0 = solver.first_step(first_kick_term, t0=0.1, dt0=step_size, y0=y0, args=cosmo)
         terms = tuple(terms)
     else:
         raise ValueError("Invalid number of terms.")
 
     if adjoint == "REVERSE":
         t0, t1 = 0.1, 1.0
-        ode_solutions = integrate(
-            y0, cosmo, terms, solver=solver, t0=t0, t1=t1, dt0=step_size
-        )
+        ode_solutions = integrate(y0, cosmo, terms, solver=solver, t0=t0, t1=t1, dt0=step_size)
         last_y = jax.tree.map(lambda x: x[-1], ode_solutions)
         return last_y[0], (t1 - t0) / step_size
     else:
@@ -199,9 +193,7 @@ def model(
 
 
 nbody = jax.jit(model, static_argnums=(3, 4, 5, 6, 7, 8))
-nbody_ic = jax.jit(
-    jax.grad(model, argnums=1, has_aux=True), static_argnums=(3, 4, 5, 6, 7, 8)
-)
+nbody_ic = jax.jit(jax.grad(model, argnums=1, has_aux=True), static_argnums=(3, 4, 5, 6, 7, 8))
 
 if __name__ == "__main__":
     args = parse_args()
@@ -249,9 +241,7 @@ if __name__ == "__main__":
         return jnp.interp(x.reshape([-1]), k, pk).reshape(x.shape)
 
     lineark = whitec.apply(
-        lambda k, v: pk_fn(sum(ki**2 for ki in k) ** 0.5) ** 0.5
-        * v
-        * (1 / v.BoxSize).prod() ** 0.5
+        lambda k, v: pk_fn(sum(ki**2 for ki in k) ** 0.5) ** 0.5 * v * (1 / v.BoxSize).prod() ** 0.5
     )
     init_mesh = lineark.c2r().value
 

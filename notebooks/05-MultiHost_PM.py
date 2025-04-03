@@ -15,13 +15,19 @@ from functools import partial
 import jax.numpy as jnp
 import jax_cosmo as jc
 import numpy as np
-from diffrax import (ConstantStepSize, Dopri5, LeapfrogMidpoint, ODETerm,
-                     PIDController, SaveAt, diffeqsolve)
+from diffrax import (
+    ConstantStepSize,
+    Dopri5,
+    LeapfrogMidpoint,
+    ODETerm,
+    PIDController,
+    SaveAt,
+    diffeqsolve,
+)
 from jax.experimental.mesh_utils import create_device_mesh
 from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-
 from jaxpm.kernels import interpolate_power_spectrum
 from jaxpm.painting import cic_paint_dx
 from jaxpm.pm import linear_field, lpt, make_diffrax_ode

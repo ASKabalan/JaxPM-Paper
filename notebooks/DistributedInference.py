@@ -1,24 +1,24 @@
-import os
 import jax
 
 jax.distributed.initialize()
 rank = jax.process_index()
 size = jax.process_count()
 
+from functools import partial
+
 import jax.numpy as jnp
 import jax_cosmo as jc
-import numpy as np
-from scipy.stats import norm
 import matplotlib.pyplot as plt
+import numpy as np
+from jax.experimental import mesh_utils
+from jax.experimental.multihost_utils import process_allgather, sync_global_devices
 
 # Build Porqueres et al. (2023) simulation setting
 # https://arxiv.org/abs/2304.04785
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
-from jax.experimental import mesh_utils
-from scipy.stats import norm
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 from jaxpm.distributed import normal_field
-from jax.experimental.multihost_utils import process_allgather , sync_global_devices
-from functools import partial
+from scipy.stats import norm
 
 all_gather = partial(process_allgather, tiled=True)
 
@@ -78,7 +78,7 @@ box_shape = [256,  256,  128]           # Number of voxels/particles per side
 halo_size = 64
 sharding = my_sharding
 # Generate the forward model given these survey settings
-lensing_model = jax.jit(make_full_field_model( 
+lensing_model = jax.jit(make_full_field_model(
                                             field_size=field_size,
                                             field_npix=field_npix,
                                             box_size=box_size,
@@ -95,7 +95,7 @@ def model(z,om,s8):
   w0 = -1
   cosmo = jc.Cosmology(Omega_c=Omega_c, Omega_b=Omega_b, sigma8=sigma8,
                        h=h, n_s=n_s, w0=w0, wa=0., Omega_k=0.)
-                       
+
   convergence_maps, lc = lensing_model(cosmo, nz_shear, z)
   return convergence_maps, lc
 
