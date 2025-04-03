@@ -273,8 +273,6 @@ def integrate_bwd(
         def _to_vjp_step(tc_, y, diff_args):
             t_prev = tc - dt0
             t_prev = _clip_to_start(t_prev, tc, t0_)
-            jax.debug.print("y_ct is {y_ct}", y_ct=y_ct, ordered=True)
-            jax.debug.print("t0 is {t_prev} and t1 is {tc_}", t_prev=t_prev, tc_=tc_, ordered=True)
             args_ = eqx.combine(diff_args, nondiff_args)
             y_next, _, _, _, _ = solver.step(
                 terms, t_prev, tc_, y, args_, solver_state=None, made_jump=False
