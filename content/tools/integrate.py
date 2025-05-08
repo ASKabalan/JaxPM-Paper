@@ -402,7 +402,7 @@ def integrate_bwd(
 
         t_prev = tc - dt0
         t_prev = _clip_to_start(t_prev, tc, t0_)
-
+        
         # Reverse the forward step
         y_prev = solver.reverse(terms, t_prev, tc, y, args, solver_state=None, made_jump=False)
 
@@ -431,7 +431,7 @@ def integrate_bwd(
         _, f_vjp_step = jax.vjp(_to_vjp_step, tc, y_prev, diff_args)
         step_adj_ts, adj_y, new_adj_args = f_vjp_step(adj_y)
         # If we are at the initial time, set the gradient w.r.t. the time step to zero
-        step_adj_ts = jnp.where(tc == t0, jnp.zeros_like(step_adj_ts), step_adj_ts)
+        step_adj_ts = jnp.where(tc == t_prev, jnp.zeros_like(step_adj_ts), step_adj_ts)
         # Accumulate the adjoint for the forward step
         adj_args = jax.tree.map(jnp.add, adj_args, new_adj_args)
         f_adj_ts = jax.tree.map(jnp.add, snap_adj_ts, step_adj_ts)
