@@ -23,7 +23,6 @@ from diffrax import (
     diffeqsolve,
 )
 from jax_hpc_profiler import Timer
-from jaxdecomp import ShardedArray
 from jaxpm.painting import cic_paint_dx
 from jaxpm.pm import lpt, make_diffrax_ode
 from pmesh.pm import ParticleMesh
@@ -245,7 +244,6 @@ if __name__ == "__main__":
     )
     init_mesh = lineark.c2r().value
 
-    initial_conditions = ShardedArray(jnp.asarray(init_mesh))
 
     # Make Guess IC
     guess_params = Params(Omega_c=0.8, sigma8=0.8)
@@ -261,7 +259,7 @@ if __name__ == "__main__":
         * (1 / v.BoxSize).prod() ** 0.5
     )
     init_mesh = lineark.c2r().value
-    guess_ic = ShardedArray(jnp.asarray(init_mesh))
+    guess_ic = jnp.asarray(init_mesh)
     # if adaptive solver
     if adaptive_step_solver:
         ode_terms = ODETerm(make_diffrax_ode(mesh_shape, paint_absolute_pos=False))

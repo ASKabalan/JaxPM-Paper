@@ -17,7 +17,6 @@ from diffrax import (
 )
 from jax.scipy.ndimage import map_coordinates
 from jax_cosmo.scipy.integrate import simps
-from jaxdecomp import ShardedArray
 from jaxpm.distributed import fft3d, ifft3d, normal_field, uniform_particles
 from jaxpm.kernels import fftk
 from jaxpm.painting import cic_paint_2d
@@ -109,13 +108,11 @@ def linear_field(mesh_shape, box_size, pk, field):
     return field
 
 
-def lpt_lightcone(cosmo, initial_conditions, a, mesh_shape):
+def lpt_lightcone(cosmo, initial_conditions, a, mesh_shape, paint_absolute_pos=False):
     """Computes first order LPT displacement"""
-    particles = jax.tree.map(
-        lambda ic: jnp.zeros_like(ic, shape=(*ic.shape, 3)), initial_conditions
-    )
+    particles = jnp.zeros_like(initial_conditions, shape=(*initial_conditions.shape, 3))
 
-    initial_force = pm_forces(particles, delta=initial_conditions, paint_absolute_pos=False)
+    initial_force = pm_forces(particles, delta=initial_conditions, paint_absolute_pos=paint_absolute_pos)
     a = jnp.atleast_1d(a)
     dx = growth_factor(cosmo, a).reshape([1, 1, -1, 1]) * initial_force
     p = (a**2 * growth_rate(cosmo, a) * E(cosmo, a) * growth_factor(cosmo, a)).reshape(
@@ -159,17 +156,15 @@ def make_full_field_model(
         d = positions[..., 2]
 
         # Apply 2d periodic conditions
-        xy = jax.tree.map(lambda xy: jnp.mod(xy, nx), xy)
+        xy = jnp.mod(xy, nx)
 
         # Rescaling positions to target grid
         xy = xy / nx * density_plane_npix
         # Selecting only particles that fall inside the volume of interest
-        weight = jax.tree.map(
-            lambda x: jnp.where((d > (center - w / 2)) & (d <= (center + w / 2)), 1.0, 0.0),
-            d,
-        )
+        weight = jnp.where((d > (center - w / 2)) & (d <= (center + w / 2)), 1.0, 0.0)
         # Painting density plane
-        zero_mesh = jax.tree.map(lambda _: jnp.zeros([density_plane_npix, density_plane_npix]), xy)
+        zero_mesh = jnp.zeros([density_plane_npix, density_plane_npix])
+        # Apply CIC painting
         density_plane = cic_paint_2d(zero_mesh, xy, weight)
 
         # Apply density normalization
@@ -182,24 +177,10 @@ def make_full_field_model(
         pk = jc.power.linear_matter_power(cosmo, k)
 
         def pk_fn(x):
-            return jax.tree.map(
-                lambda x: jc.scipy.interpolate.interp(x.reshape([-1]), k, pk).reshape(x.shape),
-                x,
-            )
+            return jc.scipy.interpolate.interp(x.reshape([-1]), k, pk).reshape(x.shape)
 
         # Create initial conditions
         lin_field = linear_field(box_shape, box_size, pk_fn, initial_conditions)
-
-        cosmo = jc.Cosmology(
-            Omega_c=cosmo.Omega_c,
-            sigma8=cosmo.sigma8,
-            Omega_b=cosmo.Omega_b,
-            h=cosmo.h,
-            n_s=cosmo.n_s,
-            w0=cosmo.w0,
-            Omega_k=0.0,
-            wa=0.0,
-        )
         # Temporary fix
         cosmo._workspace = {}
 
@@ -219,7 +200,8 @@ def make_full_field_model(
         r_center = 0.5 * (r[1:] + r[:-1])
         a_center = jc.background.a_of_chi(cosmo, r_center)
 
-        eps, p = lpt_lightcone(cosmo, lin_field, a_init, box_shape)
+
+        eps, p = lpt_lightcone(cosmo, lin_field, a_init, box_shape , paint_absolute_pos=False)
         solver = SemiImplicitEuler()
         saveat = SaveAt(ts=a_center[::-1], fn=density_plane_fn)
         y0 = (eps, p)
@@ -247,7 +229,7 @@ def make_full_field_model(
         )
         lightcone = lightcone[::-1]
         a = ts[::-1]
-        lightcone = jax.tree.map(lambda lc: jnp.transpose(lc, axes=(1, 2, 0)), lightcone)
+        lightcone = jnp.transpose(lightcone, axes=(1, 2, 0))
 
         # Defining the coordinate grid for lensing map
         xgrid, ygrid = jnp.meshgrid(
@@ -262,7 +244,7 @@ def make_full_field_model(
         convergence_maps = [
             simps(
                 lambda z: nz(z).reshape([-1, 1, 1])
-                * convergence_Born(cosmo, lightcone.data, r_center, a, dx, dz, coords, z),
+                * convergence_Born(cosmo, lightcone, r_center, a, dx, dz, coords, z),
                 0.01,
                 3.0,
                 N=32,
@@ -305,7 +287,7 @@ class Configurations(NamedTuple):
     t0: float
     dt0: float
     t1: float
-    sharding: None
+    sharding: None = None
 
 
 class DistributedNormal(Normal):
@@ -355,7 +337,6 @@ def full_field_probmodel(config):
             ),
         )
 
-        initial_conditions = ShardedArray(initial_conditions)
 
         # Apply the forward model
         convergence_maps, _ = forward_model(cosmo, config.nz_shear, initial_conditions)
