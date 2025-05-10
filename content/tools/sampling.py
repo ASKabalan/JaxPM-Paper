@@ -30,9 +30,52 @@ def batched_sampling(
     """
     Run or resume MCMC sampling in batches with optional warmup.
 
-    See docstring improvements in earlier messages.
+    This function runs NumPyro MCMC sampling in batches, supporting multi-host distributed setups.
+    It performs initial warmup if no previous state is found, then resumes from the saved sampler
+    state and continues sampling across multiple batches.
 
-    This version does not return samples — it only saves them to disk.
+    Samples are gathered from all hosts using `jax.experimental.multihost_utils.process_allgather`
+    and saved to disk as `.npz` files. The sampler state is saved using `pickle` to enable resumption.
+
+    Parameters
+    ----------
+    mcmc_kernel : numpyro.infer.mcmc.HMCKernel
+        The kernel (e.g., NUTS(model)) used for inference.
+    path : str
+        Directory where samples and state will be saved.
+    rng_key : jax.random.PRNGKey
+        JAX random key for reproducibility.
+    num_chains : int, optional
+        Number of chains to run in parallel.
+    num_warmup : int, optional
+        Number of warmup steps before collecting samples.
+    num_samples : int, optional
+        Number of samples to collect in each batch.
+    thinning : int, optional
+        Thinning factor to reduce autocorrelation in samples.
+    batch_count : int, optional
+        Number of post-warmup sampling batches to run.
+    save : bool, optional
+        Whether to save samples and state to disk.
+    extra_fields : tuple, optional
+        Extra diagnostics to store during sampling.
+    init_params : dict, optional
+        Optional initial parameters in unconstrained space.
+    *model_args : tuple
+        Positional arguments passed to the model.
+    **model_kwargs : dict
+        Keyword arguments passed to the model.
+
+    Returns
+    -------
+    last_state : HMCState
+        Final MCMC sampler state.
+    mcmc : numpyro.infer.MCMC
+        The last MCMC object used.
+
+    Note
+    ----
+    This function is compatible with multi-host distributed training via `pjit` or `xmap`.
     """
     state_path = f"{path}/sampling_state.pkl"
     samples_path = f"{path}/samples_0.npz"
@@ -102,17 +145,25 @@ def load_samples(path: str, param_names: list[str]) -> dict:
     """
     Efficiently load and concatenate specified parameter samples from saved batches.
 
+    This function searches the specified directory for all `.npz` sample files and extracts
+    the requested parameter arrays, concatenating them across all saved batches.
+
     Parameters
     ----------
     path : str
-        Base path prefix used when saving (e.g. 'output/mcmc_run').
+        Directory where samples are saved (e.g., "output/mcmc_run").
     param_names : list of str
-        List of parameter names to extract and concatenate.
+        List of parameter names to load and concatenate.
 
     Returns
     -------
     concatenated : dict
-        Dictionary mapping each param name to a concatenated jnp.ndarray.
+        Dictionary mapping parameter names to concatenated JAX arrays.
+
+    Note
+    ----
+    This function assumes all samples were saved using `jnp.savez(...)` with consistent shapes
+    and parameter names.
     """
     collected = {name: [] for name in param_names}
     files = glob(os.path.join(path, "*samples_*.npz"))

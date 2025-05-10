@@ -1,3 +1,6 @@
+# ==========================================================
+# Imports
+# ==========================================================
 from functools import partial
 from typing import NamedTuple
 
@@ -7,12 +10,7 @@ import jax_cosmo as jc
 import jax_cosmo.constants as constants
 import numpyro
 import numpyro.distributions as dist
-from diffrax import (
-    ODETerm,
-    RecursiveCheckpointAdjoint,
-    SaveAt,
-    diffeqsolve,
-)
+from diffrax import ODETerm, RecursiveCheckpointAdjoint, SaveAt, diffeqsolve
 from jax.scipy.ndimage import map_coordinates
 from jax_cosmo.scipy.integrate import simps
 from jaxpm.distributed import fft3d, ifft3d, normal_field, uniform_particles
@@ -28,6 +26,9 @@ from tools.integrate import integrate as reverse_adjoint_integrate
 from tools.ode import symplectic_fpm_ode
 from tools.semi_implicite_euler import SemiImplicitEuler
 
+# ==========================================================
+# Default Cosmology Configuration
+# ==========================================================
 Planck18 = partial(
     jc.Cosmology,
     # Omega_m = 0.3111
@@ -42,24 +43,38 @@ Planck18 = partial(
 )
 
 
+# ==========================================================
+# Weak Lensing Born Approximation
+# ==========================================================
 def convergence_Born(cosmo, density_planes, r, a, dx, dz, coords, z_source):
     """
-    Compute the Born convergence
-    Args:
-      cosmo: `Cosmology`, cosmology object.
-      density_planes: list of dictionaries (r, a, density_plane, dx, dz), lens planes to use
-      coords: a 3-D array of angular coordinates in radians of N points with shape [batch, N, 2].
-      z_source: 1-D `Tensor` of source redshifts with shape [Nz] .
-      name: `string`, name of the operation.
-    Returns:
-      `Tensor` of shape [batch_size, N, Nz], of convergence values.
+    Compute Born-approximation lensing convergence maps.
+
+    Parameters
+    ----------
+    cosmo : jc.Cosmology
+        Cosmology object.
+    density_planes : ndarray
+        3D array of lensing density planes [nx, ny, n_planes].
+    r, a : ndarray
+        Comoving distances and scale factors per plane.
+    dx : float
+        Pixel scale.
+    dz : float
+        Redshift bin width.
+    coords : ndarray
+        Angular coordinates grid [2, N, 2] in radians.
+    z_source : ndarray
+        Source redshifts.
+
+    Returns
+    -------
+    convergence : ndarray
+        2D convergence map for each source redshift.
     """
-    # Compute constant prefactor:
     constant_factor = 3 / 2 * cosmo.Omega_m * (constants.H0 / constants.c) ** 2
     # Compute comoving distance of source galaxies
     r_s = jc.background.radial_comoving_distance(cosmo, 1 / (1 + z_source))
-
-    convergence = 0
     n_planes = len(r)
 
     def scan_fn(carry, i):
@@ -74,21 +89,25 @@ def convergence_Born(cosmo, density_planes, r, a, dx, dz, coords, z_source):
 
         return carry, im * jnp.clip(1.0 - (r[i] / r_s), 0, 1000).reshape([-1, 1, 1])
 
-    # Similar to for loops but using a jaxified approach
     _, convergence = jax.lax.scan(scan_fn, (density_planes, a, r), jnp.arange(n_planes))
-
     return convergence.sum(axis=0)
 
 
+# ==========================================================
+# Background Expansion Function
+# ==========================================================
 def E(cosmo, a):
+    """Hubble expansion function E(a)"""
     return jnp.sqrt(jc.background.Esqr(cosmo, a))
 
 
+# ==========================================================
+# Linear Initial Conditions Generator
+# ==========================================================
 def linear_field(mesh_shape, box_size, pk, field):
     """
-    Generate initial conditions.
+    Generate a linear matter field using input power spectrum.
     """
-    # Initialize a random field with one slice on each gpu
     field = fft3d(field)
     kvec = fftk(field)
     kmesh = sum((kk / box_size[i] * mesh_shape[i]) ** 2 for i, kk in enumerate(kvec)) ** 0.5
@@ -97,16 +116,16 @@ def linear_field(mesh_shape, box_size, pk, field):
         * (mesh_shape[0] * mesh_shape[1] * mesh_shape[2])
         / (box_size[0] * box_size[1] * box_size[2])
     )
-
     field = field * (pkmesh) ** 0.5
-    field = ifft3d(field)
-    return field
+    return ifft3d(field)
 
 
+# ==========================================================
+# LPT Initial Displacement
+# ==========================================================
 def lpt_lightcone(cosmo, initial_conditions, a, mesh_shape, paint_absolute_pos=False):
-    """Computes first order LPT displacement"""
+    """Compute first-order LPT displacement and velocity"""
     particles = jnp.zeros_like(initial_conditions, shape=(*initial_conditions.shape, 3))
-
     initial_force = pm_forces(
         particles, delta=initial_conditions, paint_absolute_pos=paint_absolute_pos
     )
@@ -118,7 +137,13 @@ def lpt_lightcone(cosmo, initial_conditions, a, mesh_shape, paint_absolute_pos=F
     return dx, p
 
 
+# ==========================================================
+# ODE Integrator Wrapper
+# ==========================================================
 def integrate(terms, solver, t0, t1, dt0, y0, args, saveat, adjoint):
+    """
+    Run ODE integration with diffrax or reverse-mode adjoint integrator.
+    """
     if isinstance(adjoint, RecursiveCheckpointAdjoint):
         solution = diffeqsolve(terms, solver, t0, t1, dt0, y0, args, saveat=saveat, adjoint=adjoint)
         return solution.ys, saveat.subs.ts
@@ -127,6 +152,9 @@ def integrate(terms, solver, t0, t1, dt0, y0, args, saveat, adjoint):
         return solution, saveat.subs.ts
 
 
+# ==========================================================
+# Forward Model Generator (Simulates Convergence Maps)
+# ==========================================================
 def make_full_field_model(
     field_size,
     field_npix,
@@ -140,6 +168,10 @@ def make_full_field_model(
     dt0=0.05,
     t1=1.0,
 ):
+    """
+    Create the full forward model: linear field -> lensing convergence maps.
+    """
+
     def density_plane_fn(t, y, args):
         (cosmo,) = args
         positions = y[0]
@@ -169,7 +201,6 @@ def make_full_field_model(
         return density_plane
 
     def forward_model(cosmo, nz_shear, initial_conditions):
-        # Create a small function to generate the matter power spectrum
         k = jnp.logspace(-4, 1, 128)
         pk = jc.power.linear_matter_power(cosmo, k)
 
@@ -268,6 +299,9 @@ def make_full_field_model(
     return forward_model
 
 
+# ==========================================================
+# Configuration Class
+# ==========================================================
 class Configurations(NamedTuple):
     field_size: float
     field_npix: int
@@ -287,7 +321,14 @@ class Configurations(NamedTuple):
     adjoint: RecursiveCheckpointAdjoint = RecursiveCheckpointAdjoint(5)
 
 
+# ==========================================================
+# Custom Sharded Normal Distribution
+# ==========================================================
 class DistributedNormal(Normal):
+    """
+    Sharded normal distribution for distributed initial conditions.
+    """
+
     arg_constraints = {"loc": constraints.real, "scale": constraints.positive}
     support = constraints.real
     reparametrized_params = ["loc", "scale"]
@@ -304,8 +345,14 @@ class DistributedNormal(Normal):
         return self.loc + eps * self.scale
 
 
-# Build the probabilistic model
+# ==========================================================
+# Probabilistic Model Definition
+# ==========================================================
 def full_field_probmodel(config):
+    """
+    Define the full-field forward model and observation likelihood.
+    """
+
     def model():
         forward_model = make_full_field_model(
             config.field_size,
@@ -358,6 +405,9 @@ def full_field_probmodel(config):
     return model
 
 
+# ==========================================================
+# Pixel Window Function for Angular Power Spectrum
+# ==========================================================
 def pixel_window_function(L, pixel_size_arcmin):
     """
     Calculate the pixel window function W_l for a given angular wave number l and pixel size.
@@ -394,9 +444,9 @@ def make_2pt_model(pixel_scale, ell, sigma_e=0.3):
 
     def forward_model(cosmo, nz_shear):
         tracer = jc.probes.WeakLensing(nz_shear, sigma_e=sigma_e)
-        cell_theory = jc.angular_cl.angular_cl(cosmo, ell, [tracer], nonlinear_fn=jc.power.linear)
-        cell_theory = cell_theory * pixel_window_function(ell, pixel_scale)
-        cell_noise = jc.angular_cl.noise_cl(ell, [tracer])
-        return cell_theory, cell_noise
+        cl_signal = jc.angular_cl.angular_cl(cosmo, ell, [tracer], nonlinear_fn=jc.power.linear)
+        cl_signal *= pixel_window_function(ell, pixel_scale)
+        cl_noise = jc.angular_cl.noise_cl(ell, [tracer])
+        return cl_signal, cl_noise
 
     return forward_model
