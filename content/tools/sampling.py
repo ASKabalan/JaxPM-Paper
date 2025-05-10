@@ -1,11 +1,15 @@
 import os
 import pickle
+from functools import partial
 from glob import glob
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.experimental.multihost_utils import process_allgather
 from numpyro.infer import MCMC
+
+all_gather = partial(process_allgather, tiled=True)
 
 
 def batched_sampling(
@@ -15,7 +19,6 @@ def batched_sampling(
     num_chains: int = 1,
     num_warmup: int = 500,
     num_samples: int = 1000,
-    batch_size: int = 1000,
     thinning: int = 1,
     batch_count: int = 5,
     save: bool = True,
@@ -58,9 +61,8 @@ def batched_sampling(
             last_state = pickle.load(f)
         rng_key = last_state.rng_key
 
+    mcmc = None
     for i in range(2, batch_count + 2):
-        mcmc = MCMC(mcmc_kernel, num_warmup=0, num_samples=batch_size)
-        mcmc.post_warmup_state = last_state
         if last_state.i >= num_warmup + num_samples * batch_count:
             print(
                 f"✅ {num_warmup + num_samples * batch_count} samples already collected. Stopping."
@@ -68,10 +70,23 @@ def batched_sampling(
             break
 
         print(f"📦 Sampling batch {i}/{batch_count} ...")
+        mcmc = MCMC(
+            mcmc_kernel,
+            num_warmup=0,
+            num_samples=num_samples,
+            thinning=thinning,
+            num_chains=num_chains,
+            progress_bar=True,
+        )
+        mcmc.post_warmup_state = last_state
         mcmc.run(rng_key, *model_args, **model_kwargs)
 
+        samples = mcmc.get_samples()
+        host_samples = all_gather(samples)
+        del samples
+
         if save:
-            jnp.savez(f"{path}/samples_{i}.npz", **mcmc.get_samples())
+            jnp.savez(f"{path}/samples_{i}.npz", **host_samples)
             with open(state_path, "wb") as f:
                 pickle.dump(mcmc.last_state, f)
 

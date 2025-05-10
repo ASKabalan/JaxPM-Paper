@@ -1,5 +1,3 @@
-import os
-import sys
 from functools import partial
 from typing import NamedTuple
 
@@ -26,12 +24,9 @@ from numpyro.distributions import Normal, constraints
 from numpyro.distributions.util import promote_shapes
 from numpyro.util import is_prng_key
 
-parent_dir = os.path.abspath("..")
-sys.path.append(parent_dir)
-
-from tools.integrate import integrate as reverse_adjoint_integrate  # noqa : E402
-from tools.ode import symplectic_fpm_ode  # noqa : E402
-from tools.semi_implicite_euler import SemiImplicitEuler  # noqa : E402
+from tools.integrate import integrate as reverse_adjoint_integrate
+from tools.ode import symplectic_fpm_ode
+from tools.semi_implicite_euler import SemiImplicitEuler
 
 Planck18 = partial(
     jc.Cosmology,

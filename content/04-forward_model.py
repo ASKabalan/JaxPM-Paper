@@ -1,11 +1,36 @@
 import argparse
 import os
-from functools import partial
 
 import jax
+
+# =============================================================================
+# 1. If running on a distributed system, initialize JAX distributed
+# =============================================================================
+if (
+    int(os.environ.get("SLURM_NTASKS", 0)) > 1
+    or int(os.environ.get("SLURM_NTASKS_PER_NODE", 0)) > 1
+):
+    os.environ["VSCODE_PROXY_URI"] = ""
+    os.environ["no_proxy"] = ""
+    os.environ["NO_PROXY"] = ""
+    del os.environ["VSCODE_PROXY_URI"]
+    del os.environ["no_proxy"]
+    del os.environ["NO_PROXY"]
+    jax.distributed.initialize()
+
+    from jax.sharding import NamedSharding
+    from jax.sharding import PartitionSpec as P
+
+    pdims = (8, 1)
+    mesh = jax.make_mesh(pdims, ("x", "y"))
+    sharding = NamedSharding(mesh, P("x", "y"))
+else:
+    sharding = None
+# =============================================================================
+
+
 import jax.numpy as jnp
 import jax_cosmo as jc
-import numpyro
 import numpyro.distributions as dist
 from diffrax import RecursiveCheckpointAdjoint
 from numpyro.handlers import condition, seed, trace
@@ -92,6 +117,7 @@ def main():
         t1=t1,
         dt0=dt0,
         adjoint=RecursiveCheckpointAdjoint(checkpoints=5),
+        sharding=sharding,
     )
 
     # Build forward model and trace fiducial simulation
@@ -116,20 +142,20 @@ def main():
 
     print("Model Traced...")
 
-    init_strategy = (
-        partial(
-            numpyro.infer.init_to_value,
-            values={
-                "Omega_c": fiducial_model.Omega_c,
-                "sigma8": fiducial_model.sigma8,
-                "initial_conditions": model_trace["initial_conditions"]["value"],
-            },
-        ),
-    )
+    # init_strategy = (
+    #    partial(
+    #        numpyro.infer.init_to_value,
+    #        values={
+    #            "Omega_c": fiducial_model.Omega_c,
+    #            "sigma8": fiducial_model.sigma8,
+    #            "initial_conditions": model_trace["initial_conditions"]["value"],
+    #        },
+    #    ),
+    # )
 
     kernel = NUTS(
         model=observed_model,
-        init_strategy=init_strategy,
+        # init_strategy=init_strategy,
         max_tree_depth=3,
         step_size=0.05,
     )
