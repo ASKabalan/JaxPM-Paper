@@ -402,7 +402,7 @@ def integrate_bwd(
 
         t_prev = tc - dt0
         t_prev = _clip_to_start(t_prev, tc, t0_)
-        
+
         # Reverse the forward step
         y_prev = solver.reverse(terms, t_prev, tc, y, args, solver_state=None, made_jump=False)
 

@@ -29,7 +29,7 @@ def f(t, x, z):
 
 
 def g(t, y, z):
-    return y + z[0] * z[1] 
+    return y + z[0] * z[1]
 
 
 def fg(t, x_y, z):
@@ -147,7 +147,6 @@ def test_y_arg_diff(ts, save_t0, save_t1):
 @pytest.mark.parametrize("save_t0", [True, False])
 @pytest.mark.parametrize("save_t1", [True, False])
 def test_ts_diff(ts, save_t0, save_t1):
-
     y0 = (
         jax.random.normal(jax.random.PRNGKey(0), (3, 3, 3)),
         jax.random.normal(jax.random.PRNGKey(1), (3, 3, 3)),

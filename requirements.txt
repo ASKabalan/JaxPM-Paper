@@ -15,3 +15,4 @@ fastpm @ git+https://github.com/ASKabalan/fastpm-python
 numpyro
 arviz
 corner
+git+https://github.com/eelregit/pmwd

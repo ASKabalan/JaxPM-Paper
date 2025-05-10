@@ -1,5 +1,3 @@
-from diffrax import ODETerm
-from diffrax._custom_types import RealScalarLike
 from jaxpm.growth import E, Gf, dGfa, gp
 from jaxpm.growth import growth_factor as Gp
 from jaxpm.pm import pm_forces
@@ -130,45 +128,3 @@ def symplectic_ode(mesh_shape, paint_absolute_pos=True, halo_size=0, sharding=No
         return dvel
 
     return drift, kick
-
-
-class DriftODETerm(ODETerm):
-    def contr(self, t0: RealScalarLike, t1: RealScalarLike, **kwargs) -> RealScalarLike:
-        cosmo = kwargs.get("cosmo", None)
-        t0t1 = (t0 * t1) ** 0.5  # Geometric mean of t0 and t1
-
-        if cosmo is None:
-            return 0.0
-
-        factor = (Gp(cosmo, t1) - Gp(cosmo, t0)) / gp(cosmo, t0t1)
-
-        return factor
-
-
-class DoubleKickODETerm(ODETerm):
-    def contr(self, t0: RealScalarLike, t1: RealScalarLike, **kwargs) -> RealScalarLike:
-        cosmo = kwargs.get("cosmo", None)
-        t0t1 = (t0 * t1) ** 0.5  # Geometric mean of t0 and t1
-
-        if cosmo is None:
-            return 0.0
-
-        t2 = 2 * t1 - t0  # Next time step t2 for the second kick
-        t1t2 = (t1 * t2) ** 0.5  # Intermediate scale factor
-        kick_factor_1 = (Gf(cosmo, t1) - Gf(cosmo, t0t1)) / dGfa(cosmo, t1)
-        kick_factor_2 = (Gf(cosmo, t1t2) - Gf(cosmo, t1)) / dGfa(cosmo, t1)
-
-        return kick_factor_1 + kick_factor_2
-
-
-class KickODETerm(ODETerm):
-    def contr(self, t0: RealScalarLike, t1: RealScalarLike, **kwargs) -> RealScalarLike:
-        cosmo = kwargs.get("cosmo", None)
-        t0t1 = (t0 * t1) ** 0.5  # Geometric mean of t0 and t1
-
-        if cosmo is None:
-            return 0.0
-
-        kick_factor =  (Gf(cosmo, t0t1) - Gf(cosmo, t0))   / dGfa(cosmo, t0)  # fmt: skip
-
-        return kick_factor
