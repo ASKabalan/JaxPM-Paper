@@ -6,7 +6,6 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 import jax_cosmo as jc
-import numpy as np
 from jax_hpc_profiler import Timer
 from pmesh.pm import ParticleMesh
 from pmwd import (
@@ -20,6 +19,7 @@ from pmwd import (
 
 jax.config.update("jax_enable_x64", True)
 os.environ["EQX_ON_ERROR"] = "nan"
+
 
 def parse_args():
     """Parse CLI arguments for PMWD simulation."""
@@ -51,6 +51,7 @@ class Params(NamedTuple):
     Omega_c: float
     sigma8: float
 
+
 @jax.jit
 def run_nbody(params, ic, conf):
     """Run LPT + N-body and return final density field."""
@@ -73,6 +74,7 @@ def run_nbody(params, ic, conf):
     print(f"dtype of dens: {dens.dtype}")
     return dens
 
+
 def MSE(x, y):
     return jnp.mean((x - y) ** 2)
 
@@ -82,7 +84,9 @@ def model(params, ic, obs, conf):
     dens = run_nbody(params, ic, conf)
     return MSE(dens, obs)
 
+
 nbody_ic = jax.jit(jax.grad(model, argnums=2))
+
 
 def main():
     args = parse_args()
@@ -93,7 +97,6 @@ def main():
     dt0 = (t1 - t0) / args.steps
 
     for mesh_size, box_size in zip(args.mesh_sizes, args.box_sizes):
-
         ptcl_spacing = box_size / mesh_size
         ptcl_grid_shape = (mesh_size,) * 3
         mesh_shape = (mesh_size,) * 3
@@ -111,14 +114,15 @@ def main():
         )
 
         print(conf)  # with other default parameters
-        print(f'Simulating {conf.ptcl_num} particles with a {conf.mesh_shape} mesh for {conf.a_nbody_num} time steps.')
+        print(
+            f"Simulating {conf.ptcl_num} particles with a {conf.mesh_shape} mesh for {conf.a_nbody_num} time steps."
+        )
 
         params = Params(Omega_c=0.25, sigma8=0.8)
         # Set up cosmology
         cosmo = jc.Planck15(Omega_c=params.Omega_c, sigma8=params.sigma8)
         # Generate initial particle positions
         pm = ParticleMesh(BoxSize=box_shape, Nmesh=mesh_shape, dtype="f8")
-        grid = pm.generate_uniform_particle_grid(shift=0).astype(np.float64)
         # Interpolate with linear_matter spectrum to get initial density field
         k = jnp.logspace(-4, 1, 128)
         pk = jc.power.linear_matter_power(cosmo, k)
@@ -152,7 +156,6 @@ def main():
         guess_ic = jnp.asarray(init_mesh)
 
         print(f"dtype of guess_ic: {guess_ic.dtype} and initial mesh: {init_mesh.dtype}")
-
 
         jax_timer = Timer(save_jaxpr=False, jax_fn=True)
         run_body = partial(run_nbody, conf=conf)

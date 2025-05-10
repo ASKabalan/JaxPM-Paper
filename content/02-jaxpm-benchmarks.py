@@ -67,7 +67,7 @@ def parse_args():
         help="List of box sizes (must match mesh sizes).",
     )
     parser.add_argument(
-        "-s", "--solver", type=str, choices=SOLVERS, default='FASTPM', help="Solver to use."
+        "-s", "--solver", type=str, choices=SOLVERS, default="FASTPM", help="Solver to use."
     )
     parser.add_argument(
         "-a",

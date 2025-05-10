@@ -1,12 +1,12 @@
 import os
 import pickle
+from glob import glob
+
 import jax
 import jax.numpy as jnp
-from numpyro.infer import MCMC
 import numpy as np
-import jax.numpy as jnp
-import os
-from glob import glob
+from numpyro.infer import MCMC
+
 
 def batched_sampling(
     mcmc_kernel,
@@ -19,8 +19,8 @@ def batched_sampling(
     thinning: int = 1,
     batch_count: int = 5,
     save: bool = True,
-    extra_fields = (),
-    init_params = None,
+    extra_fields=(),
+    init_params=None,
     *model_args,
     **model_kwargs,
 ):
@@ -34,11 +34,18 @@ def batched_sampling(
     state_path = f"{path}/sampling_state.pkl"
     samples_path = f"{path}/samples_0.npz"
     os.makedirs(path, exist_ok=True)
-    mcmc = MCMC(mcmc_kernel, num_warmup=num_warmup, num_samples=num_samples, thinning=thinning, num_chains=num_chains , progress_bar=True)
+    mcmc = MCMC(
+        mcmc_kernel,
+        num_warmup=num_warmup,
+        num_samples=num_samples,
+        thinning=thinning,
+        num_chains=num_chains,
+        progress_bar=True,
+    )
 
     if not os.path.exists(state_path):
         print("🔁 Starting fresh with warmup...")
-        mcmc.run(rng_key, *model_args , extra_fields=extra_fields, init_params=init_params , **model_kwargs)
+        mcmc.run(rng_key, *model_args, extra_fields=extra_fields, **model_kwargs)
         if save:
             with open(state_path, "wb") as f:
                 pickle.dump(mcmc.last_state, f)
@@ -55,7 +62,9 @@ def batched_sampling(
         mcmc = MCMC(mcmc_kernel, num_warmup=0, num_samples=batch_size)
         mcmc.post_warmup_state = last_state
         if last_state.i >= num_warmup + num_samples * batch_count:
-            print(f"✅ {num_warmup + num_samples * batch_count} samples already collected. Stopping.")
+            print(
+                f"✅ {num_warmup + num_samples * batch_count} samples already collected. Stopping."
+            )
             break
 
         print(f"📦 Sampling batch {i}/{batch_count} ...")
@@ -68,10 +77,11 @@ def batched_sampling(
 
         last_state = mcmc.last_state
         with open(state_path, "wb") as f:
-                pickle.dump(last_state, f)
+            pickle.dump(last_state, f)
         rng_key = last_state.rng_key
 
-    return last_state , mcmc
+    return last_state, mcmc
+
 
 def load_samples(path: str, param_names: list[str]) -> dict:
     """
@@ -93,9 +103,9 @@ def load_samples(path: str, param_names: list[str]) -> dict:
     files = glob(os.path.join(path, "*samples_*.npz"))
 
     for file in sorted(files):
-            data = np.load(file)
-            for name in param_names:
-                if name in data:
-                    collected[name].append(jnp.array(data[name]))
+        data = np.load(file)
+        for name in param_names:
+            if name in data:
+                collected[name].append(jnp.array(data[name]))
 
     return {k: jnp.concatenate(v, axis=0) for k, v in collected.items() if v}

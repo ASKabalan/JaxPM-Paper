@@ -1,26 +1,22 @@
-import os
-import sys
 import argparse
-import numpy as np
+import os
+from functools import partial
+
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import jax_cosmo as jc
-from functools import partial
+import numpyro
+import numpyro.distributions as dist
 from diffrax import RecursiveCheckpointAdjoint
-from jaxpm.distributed import normal_field
+from numpyro.handlers import condition, seed, trace
+from numpyro.infer import NUTS
+from scipy.stats import norm
 from tools.lensing_model import (
     Configurations,
     Planck18,
     full_field_probmodel,
-    make_full_field_model,
 )
-import numpyro
-import numpyro.distributions as dist
-from numpyro.handlers import condition, seed, trace
-from numpyro.infer import MCMC, NUTS
-from scipy.stats import norm
-from tools.sampling import batched_sampling, load_samples
+from tools.sampling import batched_sampling
 
 
 def parse_args():
@@ -120,27 +116,34 @@ def main():
 
     print("Model Traced...")
 
-    init_values = {
-            "Omega_c": fiducial_cosmology.Omega_c,
-            "sigma8": fiducial_cosmology.sigma8,
-            "initial_conditions": model_trace["initial_conditions"]["value"],
-        }
+    init_strategy = (
+        partial(
+            numpyro.infer.init_to_value,
+            values={
+                "Omega_c": fiducial_model.Omega_c,
+                "sigma8": fiducial_model.sigma8,
+                "initial_conditions": model_trace["initial_conditions"]["value"],
+            },
+        ),
+    )
 
     kernel = NUTS(
         model=observed_model,
+        init_strategy=init_strategy,
         max_tree_depth=3,
         step_size=0.05,
     )
 
     print("Starting MCMC sampling...")
-    last_state , mcmc = batched_sampling(kernel , args.output,
+    last_state, mcmc = batched_sampling(
+        kernel,
+        args.output,
         rng_key=jax.random.key(1234),
         num_chains=1,
         num_warmup=args.num_warmup,
         num_samples=args.num_samples,
         batch_size=args.batch_size,
         thinning=args.thinning,
-        init_params=init_values,
     )
 
 
