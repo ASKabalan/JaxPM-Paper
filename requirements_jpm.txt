@@ -1,0 +1,14 @@
+git+https://github.com/ASKabalan/jax_cosmo@fixing-cosmo-cache
+git+https://github.com/differentiableUniverseInitiative/jaxpm@fix-sharding-error
+diffrax
+jax_hpc_profiler
+pre-commit
+pytest
+tqdm
+git+https://github.com/eelregit/pmwd
+numpyro
+arviz
+getdist
+ipython
+ipykernel
+ipywidgets
