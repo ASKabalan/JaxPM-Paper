@@ -1,6 +1,7 @@
 git+https://github.com/ASKabalan/jax_cosmo@fixing-cosmo-cache
 git+https://github.com/differentiableUniverseInitiative/jaxpm@fix-sharding-error
 diffrax
+blackjax
 jax_hpc_profiler
 pre-commit
 pytest
@@ -12,3 +13,4 @@ getdist
 ipython
 ipykernel
 ipywidgets
+rich

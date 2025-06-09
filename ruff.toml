@@ -17,4 +17,5 @@ ignore = [
     "E501",  # Line too long
     "F722",  # Do not use bare except
     "E402",  # Module level import not at top of file
+    "E731",
 ]

@@ -1,4 +1,6 @@
-module load arch/a100
-module load gcc/11.3.1 openmpi/4.1.5
+#module load arch/a100
+#module load gcc/11.3.1 openmpi/4.1.5
 pip install jax[cuda]
-pip install --no-build-isolation -r requirements.txt
+pip install -r requirements_jpm.txt
+pip install cython mpi4py
+pip install --no-build-isolation -r requirements_fpm.txt

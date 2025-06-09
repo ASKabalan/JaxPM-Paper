@@ -2,7 +2,7 @@
 # Imports
 # ==========================================================
 from functools import partial
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -22,9 +22,9 @@ from numpyro.distributions import Normal, constraints
 from numpyro.distributions.util import promote_shapes
 from numpyro.util import is_prng_key
 
-from tools.integrate import integrate as reverse_adjoint_integrate
-from tools.ode import symplectic_fpm_ode
-from tools.semi_implicite_euler import SemiImplicitEuler
+from .integrate import integrate as reverse_adjoint_integrate
+from .ode import symplectic_fpm_ode
+from .semi_implicite_euler import SemiImplicitEuler
 
 # ==========================================================
 # Default Cosmology Configuration
@@ -162,7 +162,7 @@ def make_full_field_model(
     box_size,
     density_plane_width=None,
     density_plane_npix=None,
-    density_plane_smoothing=None,
+    density_plane_smoothing=0.1,
     adjoint=RecursiveCheckpointAdjoint(5),
     t0=0.01,
     dt0=0.05,
@@ -217,7 +217,6 @@ def make_full_field_model(
         assert density_plane_width is not None
         assert density_plane_npix is not None
 
-        density_plane_smoothing = 0.1
         drift, kick, first_kick = symplectic_fpm_ode(box_shape, dt0=dt0, paint_absolute_pos=False)
         first_term = ODETerm(first_kick)
         ode_terms = ODETerm(drift), ODETerm(kick)
@@ -294,7 +293,7 @@ def make_full_field_model(
             for kmap in convergence_maps
         ]
 
-        return convergence_maps, lightcone
+        return convergence_maps, lightcone, lin_field
 
     return forward_model
 
@@ -317,7 +316,7 @@ class Configurations(NamedTuple):
     t0: float
     dt0: float
     t1: float
-    sharding: None = None
+    sharding: Any | None = None
     adjoint: RecursiveCheckpointAdjoint = RecursiveCheckpointAdjoint(5)
 
 
@@ -341,7 +340,7 @@ class DistributedNormal(Normal):
 
     def sample(self, key, sample_shape=()):
         assert is_prng_key(key)
-        eps = normal_field(sample_shape + self.batch_shape + self.event_shape, key, self.sharding)
+        eps = normal_field(key, sample_shape + self.batch_shape + self.event_shape, self.sharding)
         return self.loc + eps * self.scale
 
 
@@ -351,6 +350,13 @@ class DistributedNormal(Normal):
 def full_field_probmodel(config):
     """
     Define the full-field forward model and observation likelihood.
+
+    Parameters
+    ----------
+    config : Configurations
+        Configuration object for the simulation.
+    obs : list or None
+        Optional list of observed convergence maps to condition on.
     """
 
     def model():
@@ -382,7 +388,7 @@ def full_field_probmodel(config):
         )
 
         # Apply the forward model
-        convergence_maps, _ = forward_model(cosmo, config.nz_shear, initial_conditions)
+        convergence_maps, _, lin_field = forward_model(cosmo, config.nz_shear, initial_conditions)
 
         # Define the likelihood of observations
         observed_maps = [
