@@ -1,5 +1,6 @@
 import argparse
 import os
+
 os.environ["EQX_ON_ERROR"] = "nan"
 os.environ["JC_CACHE"] = "off"
 
@@ -142,13 +143,13 @@ class Params(NamedTuple):
     sigma8: float
 
 
-def run_lpt(params, ic , halo_size , sharding):
+def run_lpt(params, ic, halo_size, sharding):
     cosmo = jc.Planck15(Omega_c=params.Omega_c, sigma8=params.sigma8)
-    dx, p, _ = lpt(cosmo, ic, a=0.1, order=1 , halo_size=halo_size , sharding=sharding)
+    dx, p, _ = lpt(cosmo, ic, a=0.1, order=1, halo_size=halo_size, sharding=sharding)
     return dx, p
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8, 9))
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
 def run_nbody(
     params,
     ic,
@@ -157,12 +158,11 @@ def run_nbody(
     stepsize_controller=ConstantStepSize(),
     solver=Tsit5(),
     adjoint="RECURSIVE",
-    checkpoints=20,
     halo_size=0,
     sharding=None,
 ):
     ic = jax.lax.with_sharding_constraint(ic, sharding) if DISTRIBUTED else ic
-    dx, p = run_lpt(params, ic , halo_size=halo_size , sharding=sharding)
+    dx, p = run_lpt(params, ic, halo_size=halo_size, sharding=sharding)
     cosmo = jc.Planck15(Omega_c=params.Omega_c, sigma8=params.sigma8)
     if isinstance(terms, ODETerm) or len(terms) == 1:
         y0 = jax.tree.map(lambda dx, p: jnp.stack([dx, p]), dx, p)
@@ -176,17 +176,17 @@ def run_nbody(
     else:
         raise ValueError("Invalid number of terms.")
 
+    t0, t1 = 0.1, 1.0
+    num_steps = int((t1 - t0) // step_size)
     if adjoint == "REVERSE":
-        t0, t1 = 0.1, 1.0
         ode_solutions = integrate(
             terms, solver=solver, t0=t0, t1=t1, dt0=step_size, y0=y0, args=(cosmo,)
         )
         last_y = jax.tree.map(lambda x: x[-1], ode_solutions)
         observable = cic_paint_dx(last_y[0], halo_size=halo_size, sharding=sharding)
-        num_steps = (t1 - t0) / step_size
     else:
         if adjoint == "RECURSIVE":
-            adjoint = RecursiveCheckpointAdjoint(checkpoints=checkpoints)
+            adjoint = RecursiveCheckpointAdjoint(checkpoints=None)
         elif adjoint == "BACKSOLVE":
             adjoint = BacksolveAdjoint(solver=solver)
         else:
@@ -202,6 +202,7 @@ def run_nbody(
             stepsize_controller=stepsize_controller,
             adjoint=adjoint,
             args=(cosmo,),
+            max_steps=num_steps,
         )
         last_y = jax.tree.map(lambda x: x[-1], ode_solutions.ys)
         num_steps = ode_solutions.stats["num_steps"]
@@ -210,7 +211,7 @@ def run_nbody(
     return observable, num_steps
 
 
-@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8, 9, 10))
+@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8, 9))
 def model(
     params,
     ic,
@@ -220,7 +221,6 @@ def model(
     stepsize_controller=ConstantStepSize(),
     solver=Tsit5(),
     adjoint="RECURSIVE",
-    checkpoints=20,
     halo_size=0,
     sharding=None,
 ):
@@ -235,7 +235,6 @@ def model(
         stepsize_controller,
         solver,
         adjoint,
-        checkpoints,
         halo_size,
         sharding,
     )
@@ -246,8 +245,8 @@ def model(
     return ((y_hat_field - obs) ** 2).mean()
 
 
-nbody = jax.jit(model, static_argnums=(3, 4, 5, 6, 7, 8, 9, 10))
-nbody_ic = jax.jit(jax.grad(model, argnums=1), static_argnums=(3, 4, 5, 6, 7, 8, 9, 10))
+nbody = jax.jit(model, static_argnums=(3, 4, 5, 6, 7, 8, 9))
+nbody_ic = jax.jit(jax.grad(model, argnums=1), static_argnums=(3, 4, 5, 6, 7, 8, 9))
 
 if __name__ == "__main__":
     args = parse_args()
@@ -359,12 +358,8 @@ if __name__ == "__main__":
             else:
                 raise ValueError("Invalid solver.")
 
-            jax_timer = Timer(
-                save_jaxpr=False, jax_fn=True, static_argnums=(2, 3, 4, 5, 6, 7, 8, 9)
-            )
-            model_timer = Timer(
-                save_jaxpr=False, jax_fn=True, static_argnums=(3, 4, 5, 6, 7, 8, 9, 10)
-            )
+            jax_timer = Timer(save_jaxpr=False, jax_fn=True, static_argnums=(2, 3, 4, 5, 6, 7, 8))
+            model_timer = Timer(save_jaxpr=False, jax_fn=True, static_argnums=(3, 4, 5, 6, 7, 8, 9))
 
             # FORWARD
             with gpu_mesh:
@@ -378,7 +373,6 @@ if __name__ == "__main__":
                     stepsize_controller=stepsize_controller,
                     solver=solver,
                     adjoint=adjoint,
-                    checkpoints=20,
                     halo_size=halo_size,
                     sharding=sharding,
                 )
@@ -392,7 +386,6 @@ if __name__ == "__main__":
                         stepsize_controller=stepsize_controller,
                         solver=solver,
                         adjoint=adjoint,
-                        checkpoints=20,
                         halo_size=halo_size,
                         sharding=sharding,
                     )
@@ -430,7 +423,6 @@ if __name__ == "__main__":
                     stepsize_controller=stepsize_controller,
                     solver=solver,
                     adjoint=adjoint,
-                    checkpoints=20,
                     halo_size=halo_size,
                     sharding=sharding,
                 )
@@ -445,7 +437,6 @@ if __name__ == "__main__":
                         stepsize_controller=stepsize_controller,
                         solver=solver,
                         adjoint=adjoint,
-                        checkpoints=20,
                         halo_size=halo_size,
                         sharding=sharding,
                     )

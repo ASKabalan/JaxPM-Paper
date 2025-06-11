@@ -159,7 +159,7 @@ def batched_sampling(
                 progress_bar=True,
             )
             mcmc.post_warmup_state = last_state
-            mcmc.run(run_key, *model_args, **model_kwargs, **kwargs)
+            mcmc.run(run_key, *model_args, **model_kwargs)
             samples = mcmc.get_samples()
             last_state = mcmc.last_state
 

@@ -164,9 +164,9 @@ def make_full_field_model(
     density_plane_npix=None,
     density_plane_smoothing=0.1,
     adjoint=RecursiveCheckpointAdjoint(5),
-    t0=0.01,
-    dt0=0.05,
+    t0=0.1,
     t1=1.0,
+    dt0=0.05,
 ):
     """
     Create the full forward model: linear field -> lensing convergence maps.
@@ -221,7 +221,7 @@ def make_full_field_model(
         first_term = ODETerm(first_kick)
         ode_terms = ODETerm(drift), ODETerm(kick)
 
-        a_init = 0.01
+        a_init = t0
         n_lens = int(box_size[-1] // density_plane_width)
         r = jnp.linspace(0.0, box_size[-1], n_lens + 1)
         r_center = 0.5 * (r[1:] + r[:-1])
@@ -233,7 +233,7 @@ def make_full_field_model(
         y0 = (eps, p)
         args = (cosmo,)
 
-        y0 = solver.first_step(first_term, 0.01, dt0=0.05, y0=y0, args=args)
+        y0 = solver.first_step(first_term, t0, dt0=dt0, y0=y0, args=args)
 
         solution, ts = integrate(
             ode_terms,
@@ -360,18 +360,20 @@ def full_field_probmodel(config):
     """
 
     def model():
-        forward_model = make_full_field_model(
-            config.field_size,
-            config.field_npix,
-            config.box_shape,
-            config.box_size,
-            config.density_plane_width,
-            config.density_plane_npix,
-            config.density_plane_smoothing,
-            adjoint=config.adjoint,
-            t0=config.t0,
-            dt0=config.dt0,
-            t1=config.t1,
+        forward_model = jax.jit(
+            make_full_field_model(
+                config.field_size,
+                config.field_npix,
+                config.box_shape,
+                config.box_size,
+                config.density_plane_width,
+                config.density_plane_npix,
+                config.density_plane_smoothing,
+                adjoint=config.adjoint,
+                t0=config.t0,
+                dt0=config.dt0,
+                t1=config.t1,
+            )
         )
 
         # Sampling the cosmological parameters
@@ -388,7 +390,9 @@ def full_field_probmodel(config):
         )
 
         # Apply the forward model
-        convergence_maps, _, lin_field = forward_model(cosmo, config.nz_shear, initial_conditions)
+        convergence_maps, lc, lin_field = forward_model(cosmo, config.nz_shear, initial_conditions)
+        numpyro.deterministic("lightcone", lc)
+        numpyro.deterministic("ic", lin_field)
 
         # Define the likelihood of observations
         observed_maps = [
