@@ -1,5 +1,35 @@
 import argparse
 import os
+os.environ["EQX_ON_ERROR"] = "nan"
+os.environ["JC_CACHE"] = "off"
+
+DISTRIBUTED = False
+if os.environ.get("FAKE_DIST", "0") == "1":
+    os.environ["JAX_PLATFORM_NAME"] = "cpu"
+    os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    DISTRIBUTED = True
+
+import jax
+
+# =============================================================================
+# 1. If running on a distributed system, initialize JAX distributed
+# =============================================================================
+if (
+    int(os.environ.get("SLURM_NTASKS", 0)) > 1
+    or int(os.environ.get("SLURM_NTASKS_PER_NODE", 0)) > 1
+):
+    os.environ["VSCODE_PROXY_URI"] = ""
+    os.environ["no_proxy"] = ""
+    os.environ["NO_PROXY"] = ""
+    del os.environ["VSCODE_PROXY_URI"]
+    del os.environ["no_proxy"]
+    del os.environ["NO_PROXY"]
+    jax.distributed.initialize()
+    DISTRIBUTED = True
+
+# =============================================================================
+
+
 from functools import partial
 from typing import NamedTuple
 
@@ -17,6 +47,9 @@ from diffrax import (
     Tsit5,
     diffeqsolve,
 )
+from jax.experimental.multihost_utils import process_allgather
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from jax_hpc_profiler import Timer
 from jaxpm.painting import cic_paint_dx
 from jaxpm.pm import lpt, make_diffrax_ode
@@ -25,8 +58,10 @@ from tools.integrate import integrate
 from tools.ode import symplectic_fpm_ode
 from tools.semi_implicite_euler import SemiImplicitEuler
 
+all_gather = partial(process_allgather, tiled=True)
+
 jax.config.update("jax_enable_x64", True)
-os.environ["EQX_ON_ERROR"] = "nan"
+
 
 # Define available solvers and adjoint methods
 ADAPTIVE_SOLVERS = {
@@ -84,6 +119,21 @@ def parse_args():
     parser.add_argument(
         "-n", "--steps", type=int, default=10, help="Number of time steps (e.g., 10)"
     )
+    parser.add_argument(
+        "-p",
+        "--pdims",
+        type=int,
+        nargs=2,
+        default=[8, 1],
+        help="Partition dimensions for distributed JAX (e.g., 8 1).",
+    )
+    parser.add_argument(
+        "-i",
+        "--iterations",
+        type=int,
+        default=2,
+        help="Number of iterations to run for each configuration.",
+    )
     return parser.parse_args()
 
 
@@ -92,13 +142,13 @@ class Params(NamedTuple):
     sigma8: float
 
 
-def run_lpt(params, ic):
+def run_lpt(params, ic , halo_size , sharding):
     cosmo = jc.Planck15(Omega_c=params.Omega_c, sigma8=params.sigma8)
-    dx, p, _ = lpt(cosmo, ic, a=0.1, order=1)
+    dx, p, _ = lpt(cosmo, ic, a=0.1, order=1 , halo_size=halo_size , sharding=sharding)
     return dx, p
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8, 9))
 def run_nbody(
     params,
     ic,
@@ -108,8 +158,11 @@ def run_nbody(
     solver=Tsit5(),
     adjoint="RECURSIVE",
     checkpoints=20,
+    halo_size=0,
+    sharding=None,
 ):
-    dx, p = run_lpt(params, ic)
+    ic = jax.lax.with_sharding_constraint(ic, sharding) if DISTRIBUTED else ic
+    dx, p = run_lpt(params, ic , halo_size=halo_size , sharding=sharding)
     cosmo = jc.Planck15(Omega_c=params.Omega_c, sigma8=params.sigma8)
     if isinstance(terms, ODETerm) or len(terms) == 1:
         y0 = jax.tree.map(lambda dx, p: jnp.stack([dx, p]), dx, p)
@@ -129,8 +182,8 @@ def run_nbody(
             terms, solver=solver, t0=t0, t1=t1, dt0=step_size, y0=y0, args=(cosmo,)
         )
         last_y = jax.tree.map(lambda x: x[-1], ode_solutions)
-        observable = cic_paint_dx(last_y[0])
-        return observable, (t1 - t0) / step_size
+        observable = cic_paint_dx(last_y[0], halo_size=halo_size, sharding=sharding)
+        num_steps = (t1 - t0) / step_size
     else:
         if adjoint == "RECURSIVE":
             adjoint = RecursiveCheckpointAdjoint(checkpoints=checkpoints)
@@ -152,15 +205,12 @@ def run_nbody(
         )
         last_y = jax.tree.map(lambda x: x[-1], ode_solutions.ys)
         num_steps = ode_solutions.stats["num_steps"]
-        observable = cic_paint_dx(last_y[0])
-        return observable, num_steps
+        observable = cic_paint_dx(last_y[0], halo_size=halo_size, sharding=sharding)
+
+    return observable, num_steps
 
 
-def MSE(x, y):
-    return jnp.mean((x - y) ** 2)
-
-
-@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
+@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8, 9, 10))
 def model(
     params,
     ic,
@@ -171,15 +221,33 @@ def model(
     solver=Tsit5(),
     adjoint="RECURSIVE",
     checkpoints=20,
+    halo_size=0,
+    sharding=None,
 ):
-    y_hat_field, num_steps = run_nbody(
-        params, ic, term, step_size, stepsize_controller, solver, adjoint, checkpoints
+    ic = jax.lax.with_sharding_constraint(ic, sharding) if DISTRIBUTED else ic
+    obs = jax.lax.with_sharding_constraint(obs, sharding) if DISTRIBUTED else obs
+
+    y_hat_field, _ = run_nbody(
+        params,
+        ic,
+        term,
+        step_size,
+        stepsize_controller,
+        solver,
+        adjoint,
+        checkpoints,
+        halo_size,
+        sharding,
     )
-    return MSE(y_hat_field, obs), num_steps
+    y_hat_field = (
+        jax.lax.with_sharding_constraint(y_hat_field, sharding) if DISTRIBUTED else y_hat_field
+    )
+
+    return ((y_hat_field - obs) ** 2).mean()
 
 
-nbody = jax.jit(model, static_argnums=(3, 4, 5, 6, 7, 8))
-nbody_ic = jax.jit(jax.grad(model, argnums=1, has_aux=True), static_argnums=(3, 4, 5, 6, 7, 8))
+nbody = jax.jit(model, static_argnums=(3, 4, 5, 6, 7, 8, 9, 10))
+nbody_ic = jax.jit(jax.grad(model, argnums=1), static_argnums=(3, 4, 5, 6, 7, 8, 9, 10))
 
 if __name__ == "__main__":
     args = parse_args()
@@ -205,6 +273,16 @@ if __name__ == "__main__":
             assert adjoint in ADJOINTS_CONSTANT
         solver = SYMPLECTIC_SOLVERS[solver]
 
+    if DISTRIBUTED:
+        pdims = tuple(args.pdims)
+        gpu_mesh = jax.make_mesh(pdims, ("x", "y"))
+        sharding = NamedSharding(gpu_mesh, P("x", "y"))
+
+    else:
+        pdims = (1, 1)
+        sharding = None
+        gpu_mesh = jax.make_mesh(pdims, ("x", "y"))
+
     for mesh_size, box_size in zip(args.mesh_sizes, args.box_sizes):
         mesh_shape = (mesh_size,) * 3
         box_shape = (box_size,) * 3
@@ -212,11 +290,13 @@ if __name__ == "__main__":
             print(
                 f"Running simulation with {args.solver}, adjoint {adjoint}, rtol={args.rtol}, steps={args.steps}"
             )
-            print(f" -> mesh_shape={mesh_shape}, box_size={box_size}")
+            print(f" -> mesh_shape={mesh_shape}, box_size={box_shape}, sharding={sharding}")
 
             omega_c = 0.25
             sigma8 = 0.8
+            params = Params(Omega_c=omega_c, sigma8=sigma8)
             cosmo = jc.Planck15(Omega_c=omega_c, sigma8=sigma8)
+            halo_size = mesh_shape[0] // 4 if DISTRIBUTED else 0
             # Generate initial particle positions
             pm = ParticleMesh(BoxSize=box_shape, Nmesh=mesh_shape, dtype="f8")
             grid = pm.generate_uniform_particle_grid(shift=0).astype(np.float64)
@@ -235,6 +315,11 @@ if __name__ == "__main__":
                 * (1 / v.BoxSize).prod() ** 0.5
             )
             init_mesh = lineark.c2r().value
+            init_mesh = (
+                jax.lax.with_sharding_constraint(jnp.asarray(init_mesh), sharding)
+                if DISTRIBUTED
+                else jnp.asarray(init_mesh)
+            )
 
             # Make Guess IC
             guess_params = Params(Omega_c=0.8, sigma8=0.8)
@@ -251,46 +336,69 @@ if __name__ == "__main__":
             )
             init_mesh = lineark.c2r().value
             guess_ic = jnp.asarray(init_mesh)
+            guess_ic = (
+                jax.lax.with_sharding_constraint(guess_ic, sharding) if DISTRIBUTED else guess_ic
+            )
             # if adaptive solver
             if adaptive_step_solver:
-                ode_terms = ODETerm(make_diffrax_ode(mesh_shape, paint_absolute_pos=False))
+                ode_terms = ODETerm(
+                    make_diffrax_ode(
+                        mesh_shape, paint_absolute_pos=False, halo_size=halo_size, sharding=sharding
+                    )
+                )
             elif args.solver == "FASTPM":
                 drift, kick, first_kick = symplectic_fpm_ode(
-                    mesh_shape, step_size, paint_absolute_pos=False
+                    mesh_shape,
+                    step_size,
+                    paint_absolute_pos=False,
+                    halo_size=halo_size,
+                    sharding=sharding,
                 )
+                print(f"Creating terms with halo_size={halo_size} and sharding={sharding}")
                 ode_terms = ODETerm(drift), ODETerm(kick), ODETerm(first_kick)
             else:
                 raise ValueError("Invalid solver.")
 
-            jax_timer = Timer(save_jaxpr=False, jax_fn=True, static_argnums=(2, 3, 4, 5, 6, 7))
-            model_timer = Timer(save_jaxpr=False, jax_fn=True, static_argnums=(3, 4, 5, 6, 7, 8))
+            jax_timer = Timer(
+                save_jaxpr=False, jax_fn=True, static_argnums=(2, 3, 4, 5, 6, 7, 8, 9)
+            )
+            model_timer = Timer(
+                save_jaxpr=False, jax_fn=True, static_argnums=(3, 4, 5, 6, 7, 8, 9, 10)
+            )
 
             # FORWARD
-            print("Running Forward Pass")
-            observable, num_steps = jax_timer.chrono_jit(
-                run_nbody,
-                guess_params,
-                guess_ic,
-                ode_terms,
-                step_size=step_size,
-                stepsize_controller=stepsize_controller,
-                solver=solver,
-                adjoint=adjoint,
-                checkpoints=20,
-            )
-            for _ in range(5):
-                observable, num_steps = jax_timer.chrono_fun(
+            with gpu_mesh:
+                print("Running Forward Pass")
+                observable, num_steps = jax_timer.chrono_jit(
                     run_nbody,
-                    guess_params,
-                    guess_ic,
+                    params,
+                    init_mesh,
                     ode_terms,
                     step_size=step_size,
+                    stepsize_controller=stepsize_controller,
                     solver=solver,
                     adjoint=adjoint,
                     checkpoints=20,
+                    halo_size=halo_size,
+                    sharding=sharding,
                 )
+                for _ in range(args.iterations):
+                    observable, num_steps = jax_timer.chrono_fun(
+                        run_nbody,
+                        params,
+                        init_mesh,
+                        ode_terms,
+                        step_size=step_size,
+                        stepsize_controller=stepsize_controller,
+                        solver=solver,
+                        adjoint=adjoint,
+                        checkpoints=20,
+                        halo_size=halo_size,
+                        sharding=sharding,
+                    )
 
-            data = {"observable": observable}
+            print(f" -> Sharding of Observable: {observable.sharding}")
+            data = {"observable": all_gather(observable)}
             kwargs = {
                 "function": f"Forward {adjoint}",
                 "precision": "float64",
@@ -298,6 +406,8 @@ if __name__ == "__main__":
                 "y": mesh_shape[1],
                 "z": mesh_shape[2],
                 "npz_data": data,
+                "px": pdims[0],
+                "py": pdims[1],
             }
             extra_info = {
                 "solver": solver,
@@ -308,22 +418,9 @@ if __name__ == "__main__":
             jax_timer.report(f"runs/{args.solver}.csv", **kwargs, extra_info=extra_info)
 
             # BACKWARD
-            print("Running Backward Pass")
-
-            grads, num_steps = model_timer.chrono_jit(
-                nbody_ic,
-                guess_params,
-                guess_ic,
-                observable,
-                ode_terms,
-                step_size=step_size,
-                stepsize_controller=stepsize_controller,
-                solver=solver,
-                adjoint=adjoint,
-                checkpoints=20,
-            )
-            for _ in range(5):
-                grads, num_steps = model_timer.chrono_fun(
+            with gpu_mesh:
+                print("Running Backward Pass")
+                grads = model_timer.chrono_jit(
                     nbody_ic,
                     guess_params,
                     guess_ic,
@@ -334,9 +431,26 @@ if __name__ == "__main__":
                     solver=solver,
                     adjoint=adjoint,
                     checkpoints=20,
+                    halo_size=halo_size,
+                    sharding=sharding,
                 )
-
-            data = {"grads": grads}
+                for _ in range(args.iterations):
+                    grads = model_timer.chrono_fun(
+                        nbody_ic,
+                        guess_params,
+                        guess_ic,
+                        observable,
+                        ode_terms,
+                        step_size=step_size,
+                        stepsize_controller=stepsize_controller,
+                        solver=solver,
+                        adjoint=adjoint,
+                        checkpoints=20,
+                        halo_size=halo_size,
+                        sharding=sharding,
+                    )
+            print(f" -> Sharding of Gradients: {grads.sharding}")
+            data = {"grads": all_gather(grads)}
             kwargs = {
                 "function": f"Backward {adjoint}",
                 "precision": "float64",
@@ -344,6 +458,8 @@ if __name__ == "__main__":
                 "y": mesh_shape[1],
                 "z": mesh_shape[2],
                 "npz_data": data,
+                "px": pdims[0],
+                "py": pdims[1],
             }
             extra_info = {
                 "solver": solver,
