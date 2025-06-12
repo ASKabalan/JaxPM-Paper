@@ -197,8 +197,10 @@ def make_full_field_model(
         weight = jnp.where((d > (center - w / 2)) & (d <= (center + w / 2)), 1.0, 0.0)
         # Painting density plane
         zero_mesh = jnp.zeros([density_plane_npix, density_plane_npix])
+        # Apply sharding in order to recover sharding when taking gradients
+        if sharding is not None:
+            xy =  jax.lax.with_sharding_constraint(xy, sharding)
         # Apply CIC painting
-        xy = jax.lax.with_sharding_constraint(xy, sharding)
         density_plane = cic_paint_2d(zero_mesh, xy, weight)
 
         # Apply density normalization
@@ -232,7 +234,7 @@ def make_full_field_model(
         r_center = 0.5 * (r[1:] + r[:-1])
         a_center = jc.background.a_of_chi(cosmo, r_center)
 
-        eps, p = lpt_lightcone(cosmo, lin_field, a_init, box_shape, paint_absolute_pos=False , halo_size=halo_size, sharding=sharding)
+        eps, p = lpt_lightcone(cosmo, lin_field, a_init, paint_absolute_pos=False , halo_size=halo_size, sharding=sharding)
         solver = SemiImplicitEuler()
         saveat = SaveAt(ts=a_center[::-1], fn=density_plane_fn)
         y0 = (eps, p)
@@ -299,7 +301,7 @@ def make_full_field_model(
 
         return convergence_maps, lightcone, lin_field
 
-    return forward_model
+    return jax.jit(forward_model)
 
 
 # ==========================================================
@@ -321,6 +323,7 @@ class Configurations(NamedTuple):
     dt0: float
     t1: float
     sharding: Any | None = None
+    halo_size: int = 0
     adjoint: RecursiveCheckpointAdjoint = RecursiveCheckpointAdjoint(5)
     min_redshift: float = 0.01
     max_redshift: float = 3.0
@@ -381,6 +384,8 @@ def full_field_probmodel(config):
                 t1=config.t1,
                 min_redshift=config.min_redshift,
                 max_redshift=config.max_redshift,
+                sharding=config.sharding,
+                halo_size=config.halo_size,
             )
         )
 
