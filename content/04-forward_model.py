@@ -1,6 +1,15 @@
 import argparse
 import os
 
+os.environ["EQX_ON_ERROR"] = "nan"
+os.environ["JC_CACHE"] = "off"
+
+DISTRIBUTED = False
+if os.environ.get("FAKE_DIST", "0") == "1":
+    os.environ["JAX_PLATFORM_NAME"] = "cpu"
+    os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    DISTRIBUTED = True
+
 import jax
 
 # =============================================================================
@@ -18,15 +27,9 @@ if (
     del os.environ["NO_PROXY"]
     jax.distributed.initialize()
 
-    from jax.sharding import NamedSharding
-    from jax.sharding import PartitionSpec as P
-
-    pdims = (8, 1)
-    mesh = jax.make_mesh(pdims, ("x", "y"))
-    sharding = NamedSharding(mesh, P("x", "y"))
-else:
-    sharding = None
 # =============================================================================
+if jax.device_count() > 1:
+    DISTRIBUTED = True
 
 
 import arviz as az
@@ -36,6 +39,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpyro.distributions as dist
 from diffrax import RecursiveCheckpointAdjoint
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from numpyro.handlers import condition, seed, trace
 from scipy.stats import norm
 from tools.lensing_model import (
@@ -52,32 +57,55 @@ os.environ["EQX_ON_ERROR"] = "nan"
 jax.config.update("jax_enable_x64", True)
 
 
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run lensing full field inference.")
-    parser.add_argument("--output", type=str, default="samples", help="Directory to save samples")
 
-    parser.add_argument("--box_shape", nargs=3, type=int, default=[16, 16, 32])
-    parser.add_argument("--box_size", nargs=3, type=float, default=[200.0, 200.0, 400.0])
-    parser.add_argument("--field_size", type=float, default=16.0)
-    parser.add_argument("--field_npix", type=int, default=16)
-    parser.add_argument("--density_plane_width", type=float, default=50.0)
-    parser.add_argument("--density_plane_npix", type=int, default=16)
-    parser.add_argument("--density_plane_smoothing", type=float, default=0.1)
-    parser.add_argument("--pdims", nargs=2, type=int, default=[8, 1],
-                        help="Number of processors in x and y dimensions for distributed JAX")
-    parser.add_argument("--halo_size", default=None, type=int,
-                        help="Size of the halo in pixels. Set to 0 for no halo.")
     parser.add_argument(
-        "--obs_file", type=str, default="obs.npz", help="Path to saved observed data file (npz)"
+        "-o", "--output", type=str, default="samples", help="Directory to save samples"
     )
-    parser.add_argument("--plot", action="store_true", help="If set, plot results and exit")
 
-    parser.add_argument("--rng_key", type=int, default=1234, help="Random seed for reproducibility")
-    parser.add_argument("--num_warmup", type=int, default=10)
-    parser.add_argument("--num_samples", type=int, default=100)
-    parser.add_argument("--thinning", type=int, default=1)
-    parser.add_argument("--batch_count", type=int, default=10)
+    parser.add_argument("-b", "--box_shape", nargs=3, type=int, default=[16, 16, 32])
+    parser.add_argument("-s", "--box_size", nargs=3, type=float, default=[200.0, 200.0, 400.0])
+    parser.add_argument("-f", "--field_size", type=float, default=16.0)
+    parser.add_argument("-n", "--field_npix", type=int, default=16)
+    parser.add_argument("-w", "--density_plane_width", type=float, default=50.0)
+    parser.add_argument("-d", "--density_plane_npix", type=int, default=16)
+    parser.add_argument("-m", "--density_plane_smoothing", type=float, default=0.1)
     parser.add_argument(
+        "-p",
+        "--pdims",
+        nargs=2,
+        type=int,
+        default=[8, 1],
+        help="Number of processors in x and y dimensions for distributed JAX",
+    )
+    parser.add_argument(
+        "-H",
+        "--halo_size",
+        default=None,
+        type=int,
+        help="Size of the halo in pixels. Set to 0 for no halo.",
+    )
+    parser.add_argument(
+        "-i",
+        "--obs_file",
+        type=str,
+        default="obs.npz",
+        help="Path to saved observed data file (npz)",
+    )
+    parser.add_argument("-P", "--plot", action="store_true", help="If set, plot results and exit")
+
+    parser.add_argument(
+        "-r", "--rng_key", type=int, default=1234, help="Random seed for reproducibility"
+    )
+    parser.add_argument("-u", "--num_warmup", type=int, default=10)
+    parser.add_argument("-c", "--num_samples", type=int, default=100)
+    parser.add_argument("-t", "--thinning", type=int, default=1)
+    parser.add_argument("-B", "--batch_count", type=int, default=10)
+    parser.add_argument(
+        "-S",
         "--sampler",
         type=str,
         default="NUTS",
@@ -85,6 +113,7 @@ def parse_args():
         help=f"Sampler to use for inference. Choices: {SAMPLERS}",
     )
     parser.add_argument(
+        "-bkd",
         "--backend",
         type=str,
         default="numpyro",
@@ -167,22 +196,30 @@ def main():
     density_plane_width = args.density_plane_width
     density_plane_npix = args.density_plane_npix
     density_plane_smoothing = args.density_plane_smoothing
+
+    # Setup sharding and halo size
     halo_size = 0
-    if args.halo_size is None and sharding is not None:
-        halo_size = box_shape[0] // 8
+    if DISTRIBUTED:
+        pdims = tuple(args.pdims)
+        gpu_mesh = jax.make_mesh(pdims, ("x", "y"))
+        sharding = NamedSharding(gpu_mesh, P("x", "y"))
+        halo_size = args.halo_size if args.halo_size is not None else box_shape[0] // 8
+
     else:
-        halo_size = args.halo_size
+        sharding = None
+
     sigma_e = 0.3
     t0 = 0.1
     t1 = 1.0
     dt0 = 0.1
-
     # Cosmology
     fiducial_cosmology = Planck18()
     print("Pixel size in arcmin: ", field_size * 60 / field_npix)
 
     max_comoving_distance = box_size[2]  # in Mpc/h
-    max_redshift = (1 / jc.background.a_of_chi(fiducial_cosmology, max_comoving_distance) - 1).squeeze()
+    max_redshift = (
+        1 / jc.background.a_of_chi(fiducial_cosmology, max_comoving_distance) - 1
+    ).squeeze()
     # Setup shear redshift bins
     z = jnp.linspace(0, max_redshift, 1000)
 
@@ -192,7 +229,6 @@ def main():
         )
         for z_center, g in zip([0.5, 1.0, 1.5, 2.0], [7, 8.5, 7.5, 7])
     ]
-
 
     # Configuration
     config = Configurations(
@@ -213,7 +249,7 @@ def main():
         t0=t0,
         t1=t1,
         dt0=dt0,
-        adjoint=RecursiveCheckpointAdjoint(checkpoints=5),
+        adjoint=RecursiveCheckpointAdjoint(checkpoints=4),
         sharding=sharding,
         halo_size=halo_size,
         max_redshift=max_redshift,

@@ -123,11 +123,17 @@ def linear_field(mesh_shape, box_size, pk, field):
 # ==========================================================
 # LPT Initial Displacement
 # ==========================================================
-def lpt_lightcone(cosmo, initial_conditions, a, paint_absolute_pos=False , halo_size=0 , sharding=None):
+def lpt_lightcone(
+    cosmo, initial_conditions, a, paint_absolute_pos=False, halo_size=0, sharding=None
+):
     """Compute first-order LPT displacement and velocity"""
     particles = jnp.zeros_like(initial_conditions, shape=(*initial_conditions.shape, 3))
     initial_force = pm_forces(
-        particles, delta=initial_conditions, paint_absolute_pos=paint_absolute_pos , halo_size=halo_size, sharding=sharding
+        particles,
+        delta=initial_conditions,
+        paint_absolute_pos=paint_absolute_pos,
+        halo_size=halo_size,
+        sharding=sharding,
     )
     a = jnp.atleast_1d(a)
     dx = growth_factor(cosmo, a).reshape([1, 1, -1, 1]) * initial_force
@@ -170,7 +176,7 @@ def make_full_field_model(
     min_redshift=0.01,
     max_redshift=3.0,
     sharding=None,
-    halo_size=0
+    halo_size=0,
 ):
     """
     Create the full forward model: linear field -> lensing convergence maps.
@@ -199,7 +205,7 @@ def make_full_field_model(
         zero_mesh = jnp.zeros([density_plane_npix, density_plane_npix])
         # Apply sharding in order to recover sharding when taking gradients
         if sharding is not None:
-            xy =  jax.lax.with_sharding_constraint(xy, sharding)
+            xy = jax.lax.with_sharding_constraint(xy, sharding)
         # Apply CIC painting
         density_plane = cic_paint_2d(zero_mesh, xy, weight)
 
@@ -224,7 +230,9 @@ def make_full_field_model(
         assert density_plane_width is not None
         assert density_plane_npix is not None
 
-        drift, kick, first_kick = symplectic_fpm_ode(box_shape, dt0=dt0, paint_absolute_pos=False, halo_size=halo_size , sharding=sharding)
+        drift, kick, first_kick = symplectic_fpm_ode(
+            box_shape, dt0=dt0, paint_absolute_pos=False, halo_size=halo_size, sharding=sharding
+        )
         first_term = ODETerm(first_kick)
         ode_terms = ODETerm(drift), ODETerm(kick)
 
@@ -234,7 +242,14 @@ def make_full_field_model(
         r_center = 0.5 * (r[1:] + r[:-1])
         a_center = jc.background.a_of_chi(cosmo, r_center)
 
-        eps, p = lpt_lightcone(cosmo, lin_field, a_init, paint_absolute_pos=False , halo_size=halo_size, sharding=sharding)
+        eps, p = lpt_lightcone(
+            cosmo,
+            lin_field,
+            a_init,
+            paint_absolute_pos=False,
+            halo_size=halo_size,
+            sharding=sharding,
+        )
         solver = SemiImplicitEuler()
         saveat = SaveAt(ts=a_center[::-1], fn=density_plane_fn)
         y0 = (eps, p)
@@ -256,7 +271,6 @@ def make_full_field_model(
 
         dx = box_size[0] / density_plane_npix
         dz = density_plane_width
-
 
         lightcone = jax.vmap(lambda x: gaussian_smoothing(x, density_plane_smoothing / dx))(
             solution
@@ -369,24 +383,22 @@ def full_field_probmodel(config):
     """
 
     def model():
-        forward_model = (
-            make_full_field_model(
-                config.field_size,
-                config.field_npix,
-                config.box_shape,
-                config.box_size,
-                config.density_plane_width,
-                config.density_plane_npix,
-                config.density_plane_smoothing,
-                adjoint=config.adjoint,
-                t0=config.t0,
-                dt0=config.dt0,
-                t1=config.t1,
-                min_redshift=config.min_redshift,
-                max_redshift=config.max_redshift,
-                sharding=config.sharding,
-                halo_size=config.halo_size,
-            )
+        forward_model = make_full_field_model(
+            config.field_size,
+            config.field_npix,
+            config.box_shape,
+            config.box_size,
+            config.density_plane_width,
+            config.density_plane_npix,
+            config.density_plane_smoothing,
+            adjoint=config.adjoint,
+            t0=config.t0,
+            dt0=config.dt0,
+            t1=config.t1,
+            min_redshift=config.min_redshift,
+            max_redshift=config.max_redshift,
+            sharding=config.sharding,
+            halo_size=config.halo_size,
         )
 
         # Sampling the cosmological parameters

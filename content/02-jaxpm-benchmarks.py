@@ -26,10 +26,10 @@ if (
     del os.environ["no_proxy"]
     del os.environ["NO_PROXY"]
     jax.distributed.initialize()
-    DISTRIBUTED = True
 
 # =============================================================================
-
+if jax.device_count() > 1:
+    DISTRIBUTED = True
 
 from functools import partial
 from typing import NamedTuple
