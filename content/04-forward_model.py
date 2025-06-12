@@ -63,6 +63,10 @@ def parse_args():
     parser.add_argument("--density_plane_width", type=float, default=50.0)
     parser.add_argument("--density_plane_npix", type=int, default=16)
     parser.add_argument("--density_plane_smoothing", type=float, default=0.1)
+    parser.add_argument("--pdims", nargs=2, type=int, default=[8, 1],
+                        help="Number of processors in x and y dimensions for distributed JAX")
+    parser.add_argument("--halo_size", default=None, type=int,
+                        help="Size of the halo in pixels. Set to 0 for no halo.")
     parser.add_argument(
         "--obs_file", type=str, default="obs.npz", help="Path to saved observed data file (npz)"
     )
@@ -163,6 +167,11 @@ def main():
     density_plane_width = args.density_plane_width
     density_plane_npix = args.density_plane_npix
     density_plane_smoothing = args.density_plane_smoothing
+    halo_size = 0
+    if args.halo_size is None and sharding is not None:
+        halo_size = box_shape[0] // 8
+    else:
+        halo_size = args.halo_size
     sigma_e = 0.3
     t0 = 0.1
     t1 = 1.0
@@ -206,6 +215,7 @@ def main():
         dt0=dt0,
         adjoint=RecursiveCheckpointAdjoint(checkpoints=5),
         sharding=sharding,
+        halo_size=halo_size,
         max_redshift=max_redshift,
     )
 
