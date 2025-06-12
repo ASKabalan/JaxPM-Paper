@@ -186,7 +186,8 @@ def run_nbody(
         observable = cic_paint_dx(last_y[0], halo_size=halo_size, sharding=sharding)
     else:
         if adjoint == "RECURSIVE":
-            adjoint = RecursiveCheckpointAdjoint(checkpoints=None)
+            checkpoints = int(np.ceil(np.log(num_steps)))
+            adjoint = RecursiveCheckpointAdjoint(checkpoints=checkpoints)
         elif adjoint == "BACKSOLVE":
             adjoint = BacksolveAdjoint(solver=solver)
         else:
