@@ -122,7 +122,6 @@ def plot_results(folder):
     ):
         im = ax.imshow(img, cmap="viridis")
         ax.set_title(title)
-        plt.colorbar(im, ax=ax)
     plt.tight_layout()
     plt.show()
 
@@ -169,20 +168,22 @@ def main():
     t1 = 1.0
     dt0 = 0.1
 
+    # Cosmology
+    fiducial_cosmology = Planck18()
     print("Pixel size in arcmin: ", field_size * 60 / field_npix)
 
+    max_comoving_distance = box_size[2]  # in Mpc/h
+    max_redshift = (1 / jc.background.a_of_chi(fiducial_cosmology, max_comoving_distance) - 1).squeeze()
     # Setup shear redshift bins
-    z = jnp.linspace(0, 2.5, 1000)
+    z = jnp.linspace(0, max_redshift, 1000)
 
     nz_shear = [
         jc.redshift.kde_nz(
-            z, norm.pdf(z, loc=z_center, scale=0.12), bw=0.01, zmax=2.5, gals_per_arcmin2=g
+            z, norm.pdf(z, loc=z_center, scale=0.12), bw=0.01, zmax=max_redshift, gals_per_arcmin2=g
         )
         for z_center, g in zip([0.5, 1.0, 1.5, 2.0], [7, 8.5, 7.5, 7])
     ]
 
-    # Cosmology
-    fiducial_cosmology = Planck18()
 
     # Configuration
     config = Configurations(
@@ -199,13 +200,13 @@ def main():
         priors={
             "Omega_c": dist.Uniform(0.2, 0.4),
             "sigma8": dist.Uniform(0.6, 1.0),
-            "h": dist.Uniform(0.5, 0.9),
         },
         t0=t0,
         t1=t1,
         dt0=dt0,
         adjoint=RecursiveCheckpointAdjoint(checkpoints=5),
         sharding=sharding,
+        max_redshift=max_redshift,
     )
 
     # Build forward model and trace fiducial simulation

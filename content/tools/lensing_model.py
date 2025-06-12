@@ -123,11 +123,11 @@ def linear_field(mesh_shape, box_size, pk, field):
 # ==========================================================
 # LPT Initial Displacement
 # ==========================================================
-def lpt_lightcone(cosmo, initial_conditions, a, mesh_shape, paint_absolute_pos=False):
+def lpt_lightcone(cosmo, initial_conditions, a, paint_absolute_pos=False , halo_size=0 , sharding=None):
     """Compute first-order LPT displacement and velocity"""
     particles = jnp.zeros_like(initial_conditions, shape=(*initial_conditions.shape, 3))
     initial_force = pm_forces(
-        particles, delta=initial_conditions, paint_absolute_pos=paint_absolute_pos
+        particles, delta=initial_conditions, paint_absolute_pos=paint_absolute_pos , halo_size=halo_size, sharding=sharding
     )
     a = jnp.atleast_1d(a)
     dx = growth_factor(cosmo, a).reshape([1, 1, -1, 1]) * initial_force
@@ -167,6 +167,10 @@ def make_full_field_model(
     t0=0.1,
     t1=1.0,
     dt0=0.05,
+    min_redshift=0.01,
+    max_redshift=3.0,
+    sharding=None,
+    halo_size=0
 ):
     """
     Create the full forward model: linear field -> lensing convergence maps.
@@ -194,6 +198,7 @@ def make_full_field_model(
         # Painting density plane
         zero_mesh = jnp.zeros([density_plane_npix, density_plane_npix])
         # Apply CIC painting
+        xy = jax.lax.with_sharding_constraint(xy, sharding)
         density_plane = cic_paint_2d(zero_mesh, xy, weight)
 
         # Apply density normalization
@@ -217,7 +222,7 @@ def make_full_field_model(
         assert density_plane_width is not None
         assert density_plane_npix is not None
 
-        drift, kick, first_kick = symplectic_fpm_ode(box_shape, dt0=dt0, paint_absolute_pos=False)
+        drift, kick, first_kick = symplectic_fpm_ode(box_shape, dt0=dt0, paint_absolute_pos=False, halo_size=halo_size , sharding=sharding)
         first_term = ODETerm(first_kick)
         ode_terms = ODETerm(drift), ODETerm(kick)
 
@@ -227,7 +232,7 @@ def make_full_field_model(
         r_center = 0.5 * (r[1:] + r[:-1])
         a_center = jc.background.a_of_chi(cosmo, r_center)
 
-        eps, p = lpt_lightcone(cosmo, lin_field, a_init, box_shape, paint_absolute_pos=False)
+        eps, p = lpt_lightcone(cosmo, lin_field, a_init, box_shape, paint_absolute_pos=False , halo_size=halo_size, sharding=sharding)
         solver = SemiImplicitEuler()
         saveat = SaveAt(ts=a_center[::-1], fn=density_plane_fn)
         y0 = (eps, p)
@@ -235,7 +240,7 @@ def make_full_field_model(
 
         y0 = solver.first_step(first_term, t0, dt0=dt0, y0=y0, args=args)
 
-        solution, ts = integrate(
+        solution, _ = integrate(
             ode_terms,
             solver,
             t0=t0,
@@ -250,13 +255,12 @@ def make_full_field_model(
         dx = box_size[0] / density_plane_npix
         dz = density_plane_width
 
+
         lightcone = jax.vmap(lambda x: gaussian_smoothing(x, density_plane_smoothing / dx))(
             solution
         )
         lightcone = lightcone[::-1]
-        a = ts[::-1]
         lightcone = jnp.transpose(lightcone, axes=(1, 2, 0))
-
         # Defining the coordinate grid for lensing map
         xgrid, ygrid = jnp.meshgrid(
             jnp.linspace(0, field_size, box_shape[0], endpoint=False),  # range of X coordinates
@@ -264,15 +268,15 @@ def make_full_field_model(
         )  # range of Y coordinates
 
         # coords       = jnp.array((jnp.stack([xgrid, ygrid], axis=0)*u.deg).to(u.rad))
-        coords = jnp.array((jnp.stack([xgrid, ygrid], axis=0)) * 0.017453292519943295)  # deg->rad
+        coords = jnp.array((jnp.stack([xgrid, ygrid], axis=0)) * (jnp.pi / 180))  # deg->rad
 
         # Generate convergence maps by integrating over nz and source planes
         convergence_maps = [
             simps(
                 lambda z: nz(z).reshape([-1, 1, 1])
-                * convergence_Born(cosmo, lightcone, r_center, a, dx, dz, coords, z),
-                0.01,
-                3.0,
+                * convergence_Born(cosmo, lightcone, r_center, a_center, dx, dz, coords, z),
+                min_redshift,
+                max_redshift,
                 N=32,
             )
             for nz in nz_shear
@@ -318,6 +322,8 @@ class Configurations(NamedTuple):
     t1: float
     sharding: Any | None = None
     adjoint: RecursiveCheckpointAdjoint = RecursiveCheckpointAdjoint(5)
+    min_redshift: float = 0.01
+    max_redshift: float = 3.0
 
 
 # ==========================================================
@@ -360,7 +366,7 @@ def full_field_probmodel(config):
     """
 
     def model():
-        forward_model = jax.jit(
+        forward_model = (
             make_full_field_model(
                 config.field_size,
                 config.field_npix,
@@ -373,6 +379,8 @@ def full_field_probmodel(config):
                 t0=config.t0,
                 dt0=config.dt0,
                 t1=config.t1,
+                min_redshift=config.min_redshift,
+                max_redshift=config.max_redshift,
             )
         )
 
