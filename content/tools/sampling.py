@@ -112,6 +112,9 @@ def batched_sampling(
             last_state = mcmc.last_state
             parameters = {}
 
+        else:
+            raise ValueError(f"Unsupported backend: {backend}")
+
         if save:
             with open(state_path, "wb") as f:
                 pickle.dump((0, last_state, parameters), f)
@@ -147,6 +150,7 @@ def batched_sampling(
                 transform=lambda x, _: x.position,
                 progress_bar=True,
             )
+            nb_evals = 0  # Don't know how to get the number of evaluations in blackjax
 
         elif backend == "numpyro":
             kwargs = {}
@@ -159,16 +163,20 @@ def batched_sampling(
                 progress_bar=True,
             )
             mcmc.post_warmup_state = last_state
-            mcmc.run(run_key, *model_args, **model_kwargs)
+            mcmc.run(run_key, *model_args, **model_kwargs, extra_fields=("num_steps",))
             samples = mcmc.get_samples()
+            nb_evals = mcmc.get_extra_fields()["num_steps"]
             last_state = mcmc.last_state
+        else:
+            raise ValueError(f"Unsupported backend: {backend}")
 
         print("\n")
         nb_samples += num_samples
 
         if save:
             host_samples = all_gather(samples)
-            jnp.savez(f"{samples_prefix}_{i}.npz", **host_samples)
+            host_samples["num_steps"] = nb_evals
+            np.savez(f"{samples_prefix}_{i}.npz", **host_samples)
             del host_samples
             with open(state_path, "wb") as f:
                 pickle.dump((nb_samples, last_state, parameters), f)

@@ -41,6 +41,13 @@ def parse_args():
         help="List of box sizes (must match mesh sizes).",
     )
     parser.add_argument(
+        "-i",
+        "--iterations",
+        type=int,
+        default=2,
+        help="Number of iterations to run for each configuration.",
+    )
+    parser.add_argument(
         "-n", "--steps", type=int, default=10, help="Number of time steps (e.g., 10)"
     )
 
@@ -117,7 +124,7 @@ def main():
         print(
             f"Simulating {conf.ptcl_num} particles with a {conf.mesh_shape} mesh for {conf.a_nbody_num} time steps."
         )
-
+        num_steps = conf.a_nbody_num
         params = Params(Omega_c=0.25, sigma8=0.8)
         # Set up cosmology
         cosmo = jc.Planck15(Omega_c=params.Omega_c, sigma8=params.sigma8)
@@ -168,7 +175,7 @@ def main():
         data = {"observable": observable}
         print(f"DTYPE: {observable.dtype}")
         kwargs = {
-            "function": "Forward",
+            "function": f"Forward n{num_steps}",
             "precision": "float64",
             "x": mesh_shape[0],
             "y": mesh_shape[1],
@@ -190,7 +197,7 @@ def main():
 
         data = {"grads": grads}
         kwargs = {
-            "function": "Backward",
+            "function": f"Backward n{num_steps}",
             "precision": "float64",
             "x": mesh_shape[0],
             "y": mesh_shape[1],

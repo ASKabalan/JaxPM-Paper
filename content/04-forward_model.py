@@ -57,8 +57,6 @@ os.environ["EQX_ON_ERROR"] = "nan"
 jax.config.update("jax_enable_x64", True)
 
 
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Run lensing full field inference.")
 

@@ -394,7 +394,7 @@ if __name__ == "__main__":
             print(f" -> Sharding of Observable: {observable.sharding}")
             data = {"observable": all_gather(observable)}
             kwargs = {
-                "function": f"Forward {adjoint}",
+                "function": f"Forward {adjoint} n{num_steps}",
                 "precision": "float64",
                 "x": mesh_shape[0],
                 "y": mesh_shape[1],
@@ -444,7 +444,7 @@ if __name__ == "__main__":
             print(f" -> Sharding of Gradients: {grads.sharding}")
             data = {"grads": all_gather(grads)}
             kwargs = {
-                "function": f"Backward {adjoint}",
+                "function": f"Backward {adjoint} n{num_steps}",
                 "precision": "float64",
                 "x": mesh_shape[0],
                 "y": mesh_shape[1],
